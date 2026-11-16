@@ -7,7 +7,7 @@ import {computePreachingSummary,type PreachingTotals} from '../lib/preaching-sum
 const count=(value:number)=>new Intl.NumberFormat('es-PE',{maximumFractionDigits:1}).format(value);
 const hours=(value:number)=>new Intl.NumberFormat('es-PE',{minimumFractionDigits:1,maximumFractionDigits:1}).format(value);
 function Totals({value,showHours=true,period=false}:{value:PreachingTotals,showHours?:boolean,period?:boolean}){
- return <dl className="preaching-totals"><div><dt>{period?'Informes':'Informaron'}</dt><dd>{count(value.reports)}</dd></div>{showHours&&<div><dt>Horas</dt><dd>{hours(value.hours)}</dd></div>}<div><dt>Cursos</dt><dd>{count(value.courses)}</dd></div></dl>;
+ return <dl className="preaching-totals"><div><dt>{period?'Registros recibidos':'Cantidad'}</dt><dd>{count(period?value.reports:value.active)}</dd></div><div><dt>{period?'Participaciones':'Participaron'}</dt><dd>{count(value.participants)}</dd></div>{showHours&&<div><dt>Horas</dt><dd>{hours(value.hours)}</dd></div>}<div><dt>Cursos</dt><dd>{count(value.courses)}</dd></div></dl>;
 }
 function MissingData({summary}:{summary:ReturnType<typeof computePreachingSummary>}){
  const missingHours=summary.official.missingHours+summary.internal.missingHours,missingCourses=summary.official.missingCourses+summary.internal.missingCourses;
@@ -16,9 +16,9 @@ function MissingData({summary}:{summary:ReturnType<typeof computePreachingSummar
 export function PreachingOverview({data,filters,onSummary}:{data:Row,filters:Row,onSummary:(month:string)=>void}){
  const summary=useMemo(()=>computePreachingSummary(data,filters),[data,filters]);
  return <section className="panel preaching-overview" aria-labelledby="preaching-overview-title">
-  <div className="panel-heading"><div><h2 id="preaching-overview-title">Tipos de predicación</h2><p>{summary.latest?'Personas activas al cierre de '+monthName(summary.latest):'Sin meses cerrados en esta selección'}. Informes, horas y cursos del período seleccionado.</p></div><button type="button" className="button small" disabled={!summary.latest} onClick={()=>onSummary(summary.latest)}><ClipboardList size={16}/> Resumen oficial</button></div>
+  <div className="panel-heading"><div><h2 id="preaching-overview-title">Tipos de predicación</h2><p>{summary.latest?'Personas activas al cierre de '+monthName(summary.latest):'Sin meses cerrados en esta selección'}. Participaciones, horas y cursos del período seleccionado. Los registros recibidos incluyen respuestas SI y NO.</p></div><button type="button" className="button small" disabled={!summary.latest} onClick={()=>onSummary(summary.latest)}><ClipboardList size={16}/> Resumen oficial</button></div>
   <div className="preaching-grid">{summary.types.map(type=><article className={'preaching-card '+type.tone} key={type.id}><div className="preaching-card-title"><span className="preaching-color" aria-hidden="true"/><h3>{type.label}</h3></div><div className="preaching-person-count"><strong>{count(type.active)}</strong><span>personas activas</span></div><Totals value={type} showHours={type.id!=='PUB'} period/></article>)}</div>
-  <div className="preaching-overview-foot"><span><BarChart3 size={15}/>{count(summary.active)} personas activas · {count(summary.received)} informes recibidos</span><span>{summary.months.length===1?'Un mes cerrado':summary.months.length+' meses cerrados'}</span></div>
+  <div className="preaching-overview-foot"><span><BarChart3 size={15}/>{count(summary.active)} personas activas · {count(summary.received)} registros mensuales recibidos</span><span>{summary.months.length===1?'Un mes cerrado':summary.months.length+' meses cerrados'}</span></div>
   <MissingData summary={summary}/>
  </section>;
 }
@@ -43,7 +43,7 @@ export function MonthlySummary({data,filters,month,onClose}:{data:Row,filters:Ro
   <article className="summary-category official-consolidated"><div><span className="summary-tag">TOTAL OFICIAL</span><h3>Consolidado general</h3><p>Publicadores + Auxiliar + Precursor regular</p></div><dl className="preaching-totals"><div><dt>Horas</dt><dd>{hours(summary.official.hours)}</dd></div><div><dt>Cursos</dt><dd>{count(summary.official.courses)}</dd></div></dl></article>
   <article className="summary-category internal-special"><div><span className="summary-tag internal">SEGUIMIENTO INTERNO · NO OFICIAL</span><h3>Precursores especiales</h3><p>Especiales + misioneros</p></div><Totals value={summary.internal}/></article>
   <MissingData summary={summary}/>
-  <p className="summary-note"><CalendarDays size={13}/> Mes cerrado. Cada persona se cuenta una vez en el mes; solo se incluyen informes recibidos. Los borradores y duplicados conflictivos quedan fuera.</p>
+  <p className="summary-note"><CalendarDays size={13}/> Mes cerrado. Cantidad: personas del padrón activo del mes. Participaron: respuestas SI en los informes recibidos. Las respuestas NO no suman participación, horas ni cursos. Los borradores y duplicados conflictivos quedan fuera.</p>
   {summary.historyUnverified&&<p className="summary-note attention">Hay estados o grupos anteriores al historial confirmado. Revisa las vigencias antes de presentar este resumen.</p>}
   <div className="summary-actions"><button type="button" className="button" onClick={onClose}><X size={15}/> Cerrar</button></div>
  </div>;
