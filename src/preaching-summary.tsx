@@ -31,7 +31,7 @@ export function MonthlySummary({data,filters,month,onClose}:{data:Row,filters:Ro
  const person=data.publishers?.find((person:Row)=>person.id===filters.person)?.alias;
  if(!selectedMonth)return <div className="monthly-summary-report"><p>No hay meses cerrados para el año de servicio seleccionado.</p><button className="button" onClick={onClose}>Cerrar</button></div>;
  const rows=[
-  {id:'publishers',title:'Publicadores',detail:'Normal · Incluido en totales oficiales',value:summary.groups.publishers,hours:false},
+  {id:'publishers',title:'Publicadores',detail:'No contabilizan horas · Incluidos en totales oficiales',value:summary.groups.publishers,hours:false},
   {id:'auxiliary',title:'Auxiliar',detail:'Auxiliar de campaña + auxiliar de continuo · Incluido en totales oficiales',value:summary.groups.auxiliary,hours:true},
   {id:'regular',title:'Precursor regular',detail:'Incluido en totales oficiales',value:summary.groups.regular,hours:true}
  ];
