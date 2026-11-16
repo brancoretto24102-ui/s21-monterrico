@@ -1,0 +1,26 @@
+name: Validar cambios de S-21
+on:
+  push:
+    branches: [codex/s21-preaching-summary]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: s21-validation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    name: Pruebas y compilación
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:public
