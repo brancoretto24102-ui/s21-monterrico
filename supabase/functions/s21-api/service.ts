@@ -1,6 +1,6 @@
 import {type Row,DEFAULT_TYPES,PERMISSIONS,parseJSON,currentMonth,previousMonth,validateMonth,validateReport,valueAt,inScope,can} from './domain.ts';
 import type {Prepared,Database} from './database.ts';
-export type Identity={userId:string,email:string,displayName:string};
+export type Identity={userId:string,email:string,displayName:string,sessionCreatedAt?:string};
 export function createService(db:Database,identity:Identity){
  const database=()=>db;
 class ApiError extends Error {status:number;constructor(message:string,status=400){super(message);this.status=status;}}
@@ -20,11 +20,13 @@ async function defaults(){
  for(const [id,category,name] of [['ACTIVO','status','Activo'],['INACTIVO','status','Inactivo'],['EXPULSADO','status','Expulsado'],['FALLECIDO','status','Fallecido'],['TRASLADADO','status','Trasladado a otra congregación'],['HERMANO','role','Hermano(a)'],['SM','role','Siervo ministerial'],['ANCIANO','role','Anciano'],['OO','condition','Otras ovejas'],['UNGIDO','condition','Ungido']])qs.push(statement('INSERT OR IGNORE INTO catalogs(id,category,name) VALUES(?,?,?)',[id,category,name]));
  qs.push(statement('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',['defaults_v1','1']));await database().batch(qs);
 }
-async function actor():Promise<Row>{
+async function actor(allowPasswordChange=false):Promise<Row>{
  await defaults();
  const email=identity.email.toLowerCase();
  let u=await one('SELECT * FROM users WHERE subject=? OR (subject IS NULL AND email=?)',[identity.userId,email]);
  if(!u||!u.active)throw new ApiError('Tu cuenta todavía no tiene acceso a S-21. Contacta al administrador.',403);
+ if(u.password_not_before&&(!identity.sessionCreatedAt||new Date(identity.sessionCreatedAt).getTime()<new Date(u.password_not_before).getTime()))throw new ApiError('Tu acceso fue actualizado. Inicia sesión nuevamente.',401);
+ if(!allowPasswordChange&&(u.must_change_password||u.credential_state&&u.credential_state!=='ready'))throw Object.assign(new ApiError('Debes crear tu nueva contraseña antes de ingresar.',423),{code:'PASSWORD_CHANGE_REQUIRED'});
  if(u.subject&&u.subject!==identity.userId)throw new ApiError('La cuenta está vinculada a otra identidad.',403);
  if(!u.subject){await statement('UPDATE users SET subject=? WHERE id=? AND subject IS NULL',[identity.userId,u.id]).run();u.subject=identity.userId;}
  const profile=await one('SELECT * FROM profiles WHERE id=?',[u.profile_id]);
@@ -89,6 +91,8 @@ async function saveEntity(a:Row,entity:string,input:Row){
  if(entity==='campaign'&&(!validateMonth(values.start_month||existing?.start_month)||!validateMonth(values.end_month||existing?.end_month)||(values.end_month||existing?.end_month)<(values.start_month||existing?.start_month)))throw new ApiError('La campaña necesita un rango mensual válido.');
  if(entity==='user'){
   if(values.email)values.email=String(values.email).toLowerCase().trim();const groupList=parseJSON<string[]>(values.groups_json,[]);if(groupList.some((x:any)=>typeof x!=='string'))throw new ApiError('Grupos inválidos.');
+  if(!existing){values.must_change_password=1;values.credential_state='pending';}
+  if(existing?.subject&&values.email&&values.email!==existing.email)throw new ApiError('El correo de una cuenta vinculada no se puede sustituir. Crea otro usuario si corresponde.');
   if(existing?.id===a.id&&(values.active===0||values.profile_id&&values.profile_id!=='admin'))throw new ApiError('Conserva tu acceso de administrador mientras administras el sistema.');
  }
  if(entity==='profile'){const ps=parseJSON<string[]>(values.permissions,[]);if(ps.some(p=>!PERMISSIONS.some(([k])=>k===p)))throw new ApiError('Permiso desconocido.');if(id==='admin'&&PERMISSIONS.some(([k])=>!ps.includes(k)))throw new ApiError('El perfil Administrador debe conservar todos los permisos.');}
@@ -168,3 +172,4 @@ async function importChunk(a:Row,b:Row){
 
 return {actor,state,mutation,importChunk,defaults,one,rows,statement};
 }
+

@@ -1,0 +1,55 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {PGlite} from '@electric-sql/pglite';
+import {createDatabase} from '../supabase/functions/s21-api/database.ts';
+import {createService,type Identity} from '../supabase/functions/s21-api/service.ts';
+import {createCredentialService,TEMP_PASSWORD,type AuthAdmin,type CredentialRun} from '../supabase/functions/s21-api/credentials.ts';
+import {passwordChecks,validateNewPassword} from '../supabase/functions/s21-api/password-policy.ts';
+
+for(const value of ['1234567890','ABC1!A','abc1!a','Abcdef!','Abc123','Ab1!'])assert(validateNewPassword(value,value));
+assert.equal(validateNewPassword('Ab1!xy','Ab1!xy'),'');assert(validateNewPassword('Ab1!xy','Ab1!xz'));assert.equal(passwordChecks('Áb1!xy').filter(c=>c.valid).length,5);
+const pg=new PGlite();
+for(const file of fs.readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')).sort())await pg.exec(fs.readFileSync(`supabase/migrations/${file}`,'utf8'));
+await pg.exec('CREATE SCHEMA auth; CREATE TABLE auth.users(id text PRIMARY KEY,email text UNIQUE);');
+const query=(client:any)=>async(sql:string,args:any[])=>{const r=await client.query(sql,args);return {rows:r.rows,count:r.affectedRows??r.rows.length};};
+const service=(who:Identity,client:any=pg)=>createService(createDatabase(query(client)),who);
+const owner:Identity={userId:'owner-auth',email:'owner@example.test',displayName:'Administrador',sessionCreatedAt:'2026-11-16T13:00:00Z'};
+await service(owner).defaults();
+await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',['owner-auth',owner.email]);
+await service(owner).statement('INSERT INTO users(id,subject,email,name,profile_id) VALUES(?,?,?,?,?)',['owner','owner-auth',owner.email,'Administrador','admin']).run();
+let now='2026-11-16T14:00:00.000Z',failNext=false;const passwords=new Map<string,string>(),calls:string[]=[];
+const auth:AuthAdmin={
+ create:async(email,password)=>{if(failNext){failNext=false;throw Error('Auth test failure');}const id=crypto.randomUUID();await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[id,email]);passwords.set(id,password);calls.push('create');return id;},
+ update:async(id,password)=>{if(failNext){failNext=false;throw Error('Auth test failure');}passwords.set(id,password);calls.push('update');}
+};
+const credentials=(who:Identity)=>{const run:CredentialRun=async fn=>await pg.transaction(tx=>fn(service(who,tx)));return createCredentialService(run,auth,()=>now);};
+const save=async(data:any)=>pg.transaction(async tx=>{const s=service(owner,tx);const result=await s.mutation(await s.actor(),{action:'save',entity:'user',data});assert('id' in result);return {id:String(result.id)};});
+const created=await save({email:'new@example.test',name:'Usuario nuevo',profile_id:'encargado',groups_json:'["G1"]',active:1,must_change_password:0,credential_state:'ready'});
+let user=await service(owner).one('SELECT * FROM users WHERE id=?',[created.id]);assert.equal(user!.must_change_password,1);assert.equal(user!.credential_state,'pending');
+await credentials(owner).manage('provision',created.id,user!.version);
+user=await service(owner).one('SELECT * FROM users WHERE id=?',[created.id]);assert.equal(passwords.get(user!.subject),TEMP_PASSWORD);assert.equal(user!.credential_state,'ready');
+const fresh:Identity={userId:user!.subject,email:user!.email,displayName:'Nuevo',sessionCreatedAt:'2026-11-16T14:00:01Z'};
+assert.equal((await credentials(fresh).status()).must_change_password,true);
+await assert.rejects(()=>service(fresh).actor(),(e:any)=>e.status===423);
+const beforeInvalid=calls.length;for(const pass of ['1234567890','Abc123','Ab1!'])await assert.rejects(()=>credentials(fresh).change(pass,pass),/contraseña/);assert.equal(calls.length,beforeInvalid);
+await assert.rejects(()=>credentials(fresh).change('Ab1!xy','Ab1!xz'),/coincidir/);
+now='2026-11-16T14:01:00.000Z';await credentials(fresh).change('Ab1!xy','Ab1!xy');
+assert.equal(passwords.get(fresh.userId),'Ab1!xy');await assert.rejects(()=>service(fresh).actor(),(e:any)=>e.status===401);
+const personal={...fresh,sessionCreatedAt:'2026-11-16T14:01:01Z'};assert.equal((await service(personal).actor()).must_change_password,0);
+await assert.rejects(()=>credentials(personal).manage('reset','owner',1),/no permite/);
+user=await service(owner).one('SELECT * FROM users WHERE id=?',[created.id]);
+await assert.rejects(()=>credentials(owner).manage('reset',created.id,user!.version-1),(e:any)=>e.status===409);
+now='2026-11-16T14:02:00.000Z';await credentials(owner).manage('reset',created.id,user!.version);
+assert.equal(passwords.get(fresh.userId),TEMP_PASSWORD);await assert.rejects(()=>service(personal).actor(),(e:any)=>e.status===401);
+const again={...fresh,sessionCreatedAt:'2026-11-16T14:02:01Z'};await assert.rejects(()=>service(again).actor(),(e:any)=>e.status===423);
+now='2026-11-16T14:03:00.000Z';await credentials(again).change('Nueva2!','Nueva2!');assert.equal((await service({...again,sessionCreatedAt:'2026-11-16T14:03:01Z'}).actor()).must_change_password,0);
+const existingId='existing-auth';await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[existingId,'existing@example.test']);passwords.set(existingId,'Personal1!');
+const existing=await save({email:'existing@example.test',name:'Cuenta existente',profile_id:'consulta',active:1});const existingUser=await service(owner).one('SELECT * FROM users WHERE id=?',[existing.id]);
+await credentials(owner).manage('provision',existing.id,existingUser!.version);assert.equal(passwords.get(existingId),'Personal1!');
+const broken=await save({email:'broken@example.test',name:'Prueba error',profile_id:'consulta',active:1});let brokenUser=await service(owner).one('SELECT * FROM users WHERE id=?',[broken.id]);
+failNext=true;await assert.rejects(()=>credentials(owner).manage('provision',broken.id,brokenUser!.version),(e:any)=>e.code==='ACCOUNT_PROVISIONING_FAILED');
+brokenUser=await service(owner).one('SELECT * FROM users WHERE id=?',[broken.id]);assert.equal(brokenUser!.credential_state,'error');assert.equal(brokenUser!.must_change_password,1);
+await credentials(owner).manage('provision',broken.id,brokenUser!.version);assert.equal((await service(owner).one('SELECT * FROM users WHERE id=?',[broken.id]))!.credential_state,'ready');
+const logs=JSON.stringify(await service(owner).rows('SELECT * FROM audit'));assert(!logs.includes('Ab1!xy')&&!logs.includes('Nueva2!')&&!logs.includes(TEMP_PASSWORD));
+await assert.rejects(()=>credentials(owner).manage('reset','owner',1),/Otro administrador/);
+await pg.close();console.log('PASS: contraseña inicial, reglas y confirmación, bloqueo de datos, cambio, sesiones anteriores, permisos, restablecimiento, fallos recuperables y auditoría sin contraseñas.');

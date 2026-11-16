@@ -1,0 +1,14 @@
+import {useState} from 'react';
+import {Check,Eye,EyeOff,LoaderCircle,LockKeyhole,LogOut} from 'lucide-react';
+import {passwordChecks,validateNewPassword} from '../lib/password-policy';
+import {apiRequest,supabase,baseUrl} from './api';
+
+export function ChangePassword({email,onChanged}:{email:string,onChanged:(password:string)=>Promise<void>}){
+ const[password,setPassword]=useState(''),[confirmation,setConfirmation]=useState(''),[show,setShow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const checks=passwordChecks(password),valid=!validateNewPassword(password,confirmation);
+ const submit=async(e:React.FormEvent)=>{
+  e.preventDefault();const problem=validateNewPassword(password,confirmation);if(problem){setError(problem);return;}
+  setBusy(true);setError('');try{await apiRequest('password-change',{password,confirmation});const next=password;setPassword('');setConfirmation('');await onChanged(next);}catch(e:any){setError(e.message);}finally{setBusy(false);}
+ };
+ return <main className="password-page"><form className="password-card" onSubmit={submit}><img src={`${baseUrl}favicon.svg`} alt="S-21 Monterrico" width="54"/><span className="eyebrow">PRIMER INGRESO O RESTABLECIMIENTO</span><h1>Crea tu nueva contraseña</h1><p>Debes cambiar la contraseña inicial antes de acceder a los datos de S-21.</p><small className="password-email">{email}</small><label className="field"><span>Nueva contraseña</span><div className="auth-input"><LockKeyhole size={17}/><input type={show?'text':'password'} autoComplete="new-password" minLength={6} maxLength={128} required value={password} onChange={e=>setPassword(e.target.value)}/><button type="button" aria-label={show?'Ocultar contraseñas':'Mostrar contraseñas'} onClick={()=>setShow(!show)}>{show?<EyeOff size={18}/>:<Eye size={18}/>}</button></div></label><label className="field"><span>Repite la nueva contraseña</span><div className="auth-input"><LockKeyhole size={17}/><input type={show?'text':'password'} autoComplete="new-password" minLength={6} maxLength={128} required value={confirmation} onChange={e=>setConfirmation(e.target.value)}/></div></label><ul className="password-checks" aria-label="Condiciones de la contraseña">{checks.map(c=><li key={c.id} className={c.valid?'valid':''}><Check size={15}/>{c.label}</li>)}<li className={confirmation&&password===confirmation?'valid':''}><Check size={15}/>Las dos contraseñas coinciden</li></ul>{error&&<p className="auth-error" role="alert">{error}</p>}<button className="button primary auth-submit" disabled={!valid||busy}>{busy?<LoaderCircle className="spin" size={17}/>:<LockKeyhole size={17}/>} Guardar nueva contraseña</button><button className="button password-exit" type="button" disabled={busy} onClick={()=>supabase.auth.signOut({scope:'local'})}><LogOut size={15}/> Salir</button></form></main>;
+}
