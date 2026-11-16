@@ -8,11 +8,21 @@ import {baseUrl,supabase,apiRequest} from './api';
 import {ChangePassword} from './change-password';
 import {completeProviderLogin} from './oauth';
 import {ProviderSignIn} from './provider-sign-in';
+import {createSessionReceiver} from '../lib/session-view';
 import './style.css';
 
 function Main(){
  const [session,setSession]=useState<Session|null>(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[show,setShow]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[gate,setGate]=useState('checking'),[gateError,setGateError]=useState(''),[check,setCheck]=useState(0);
- useEffect(()=>{let cancelled=false;const {data:{subscription}}=supabase.auth.onAuthStateChange((event,s)=>{if(cancelled)return;setSession(s);if(event==='SIGNED_IN'){setGate('checking');setCheck(n=>n+1);}});completeProviderLogin().then(async message=>{if(cancelled)return;if(message)setError(message);const {data}=await supabase.auth.getSession();if(!cancelled)setSession(data.session);});return()=>{cancelled=true;subscription.unsubscribe();};},[]);
+ useEffect(()=>{
+  let cancelled=false;
+  const receive=createSessionReceiver<Session>(setSession,()=>{setGate('checking');setGateError('');});
+  const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,s)=>{if(!cancelled)receive(s);});
+  completeProviderLogin().then(async message=>{
+   if(cancelled)return;if(message)setError(message);
+   const {data}=await supabase.auth.getSession();if(!cancelled)receive(data.session);
+  });
+  return()=>{cancelled=true;subscription.unsubscribe();};
+ },[]);
  useEffect(()=>{if(!session)return;let cancelled=false;setGate('checking');setGateError('');apiRequest('auth-status').then(result=>{if(!cancelled)setGate(result.must_change_password?(result.can_change_password?'change':'pending'):'ready');}).catch((e:any)=>{if(!cancelled){setGateError(e.message);setGate('error');}});return()=>{cancelled=true;};},[session?.user.id,check]);
  useEffect(()=>{const required=()=>{setGate('checking');setCheck(n=>n+1);};const expired=()=>{setError('Tu acceso fue actualizado o la sesión venció. Inicia sesión nuevamente.');supabase.auth.signOut({scope:'local'});};window.addEventListener('s21-password-required',required);window.addEventListener('s21-session-expired',expired);return()=>{window.removeEventListener('s21-password-required',required);window.removeEventListener('s21-session-expired',expired);};},[]);
  const finishChange=async(password:string)=>{const loginEmail=session?.user.email;await supabase.auth.signOut({scope:'local'});if(!loginEmail)return;const {error}=await supabase.auth.signInWithPassword({email:loginEmail,password});if(error)setError('La contraseña fue actualizada. Inicia sesión con tu nueva contraseña.');};

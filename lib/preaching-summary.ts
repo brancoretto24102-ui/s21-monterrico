@@ -56,9 +56,10 @@ export function computePreachingSummary(data:Row,filters:Row){
  };
  for(const report of reports){
   const person=people.find(person=>person.id===report.publisher_id),{id,counts}=classification(person,report.month,report);
-  const totals:PreachingTotals={...empty(),reports:1,participants:report.participation==='SI'?1:0,
-   hours:counts===true?amount(report.hours):0,courses:amount(report.courses),
-   missingHours:counts===true&&report.hours==null&&report.participation==='SI'?1:0,missingCourses:report.courses==null?1:0};
+  const participated=report.participation==='SI';
+  const totals:PreachingTotals={...empty(),reports:1,participants:participated?1:0,
+   hours:participated&&counts===true?amount(report.hours):0,courses:participated?amount(report.courses):0,
+   missingHours:participated&&counts===true&&report.hours==null?1:0,missingCourses:participated&&report.courses==null?1:0};
   const type=byId.get(id);if(type)add(type,totals);
   add(category(id,counts),totals);
  }

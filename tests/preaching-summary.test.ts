@@ -171,4 +171,51 @@ assert.equal(undefinedFlag.groups.publishers.reports,0,'Un indicador desconocido
 assert.equal(undefinedFlag.unknown.reports,1);
 assert.equal(undefinedFlag.official.reports,0);
 
-console.log('PASS: seis tipos, Publicadores sin horas, categorías excluyentes, indicador mensual e histórico, filtros, meses cerrados, duplicados y datos vacíos.');
+
+// Synthetic regression: active publishers, SI responses and stored NO rows are different measures.
+const normals=Array.from({length:5},(_,index)=>person('normal-'+index,'PUB'));
+const inactiveNormals=Array.from({length:2},(_,index)=>person('inactive-normal-'+index,'PUB','G1','INACTIVO'));
+const auxiliaries=Array.from({length:2},(_,index)=>person('auxiliary-'+index,'PA'));
+const regulars=Array.from({length:3},(_,index)=>person('regular-'+index,'PR'));
+const specialPeople=[person('special-0','PE'),person('missionary-0','MIS')];
+const fixtureData=base([...normals,...inactiveNormals,...auxiliaries,...regulars,...specialPeople],[
+ ...normals.map((p,index)=>report(p.id,'PUB',null,index===0?3:null,{participation:index<4?'SI':'NO'})),
+ ...inactiveNormals.map(p=>report(p.id,'PUB',null,null,{participation:'NO'})),
+ ...auxiliaries.map((p,index)=>report(p.id,'PA',index===0?40:0,index===0?2:null)),
+ ...regulars.map((p,index)=>report(p.id,'PR',index===0?70:0,index===0?4:null,{participation:index<2?'SI':'NO'})),
+ ...specialPeople.map((p,index)=>report(p.id,p.preaching_type_id,index===0?60:80,index===0?1:2))
+]);
+const fixtureSummary=computePreachingSummary(fixtureData,filters);
+assert.equal(fixtureSummary.active,12);
+assert.equal(fixtureSummary.received,14,'Stored monthly records include explicit NO responses');
+assert.equal(fixtureSummary.groups.publishers.active,5,'Cantidad matches the active roster for the non-hour category');
+assert.equal(fixtureSummary.groups.publishers.reports,7);
+assert.equal(fixtureSummary.groups.publishers.participants,4,'Participaron counts SI responses only');
+assert.equal(fixtureSummary.groups.regular.active,3);
+assert.equal(fixtureSummary.groups.regular.participants,2);
+assert.equal(fixtureSummary.groups.auxiliary.active,2);
+assert.equal(fixtureSummary.groups.auxiliary.participants,2);
+assert.equal(fixtureSummary.official.active,10);
+assert.equal(fixtureSummary.official.participants,8);
+assert.equal(fixtureSummary.internal.active,2);
+assert.equal(fixtureSummary.internal.participants,2);
+assert.equal(fixtureSummary.official.hours,110);
+assert.equal(fixtureSummary.official.courses,9);
+assert.equal(fixtureSummary.official.missingCourses,5,'NO responses do not require missing course values');
+assert.equal(fixtureSummary.types.find(type=>type.id==='PUB')?.active,5);
+assert.equal(fixtureSummary.types.find(type=>type.id==='PUB')?.participants,4);
+const inactiveOnly=computePreachingSummary(fixtureData,{...filters,person:'inactive-normal-0'});
+assert.equal(inactiveOnly.groups.publishers.active,0);
+assert.equal(inactiveOnly.groups.publishers.participants,0);
+assert.equal(inactiveOnly.groups.publishers.reports,1);
+assert.equal(inactiveOnly.groups.publishers.missingCourses,0);
+const noWithLegacyValues=computePreachingSummary(base([person('legacy-no','PR')],[
+ report('legacy-no','PR',999,99,{participation:'NO'})
+]),filters);
+assert.equal(noWithLegacyValues.groups.regular.active,1);
+assert.equal(noWithLegacyValues.groups.regular.reports,1);
+assert.equal(noWithLegacyValues.groups.regular.participants,0);
+assert.equal(noWithLegacyValues.official.hours,0);
+assert.equal(noWithLegacyValues.official.courses,0);
+
+console.log('PASS: categorías, padrón activo, participación SI, registros NO, vigencias, filtros, meses cerrados y datos vacíos.');
