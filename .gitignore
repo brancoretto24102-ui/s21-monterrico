@@ -10,3 +10,4 @@ dist/
 *.log
 outputs/
 private/
+supabase/.temp/
