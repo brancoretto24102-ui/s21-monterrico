@@ -3,6 +3,7 @@ import {createClient} from 'npm:@supabase/supabase-js@2.119.0';
 import {createDatabase} from './database.ts';
 import {createService,type Identity} from './service.ts';
 import {createCredentialService,type CredentialRun} from './credentials.ts';
+import {sessionAuthentication} from './session-auth.ts';
 
 const sql=postgres(Deno.env.get('SUPABASE_DB_URL')!,{prepare:false,max:2,idle_timeout:20,connect_timeout:10});
 const url=Deno.env.get('SUPABASE_URL')!;
@@ -31,12 +32,12 @@ Deno.serve(async(req:Request)=>{
   const user=await auth.json();
   if(!user.id||!user.email||!user.email_confirmed_at||user.is_anonymous)return reply({error:'Se necesita una cuenta de correo verificada.'},403);
   // Auth has verified the JWT. Bind its session to the same verified user and its creation time.
-  let sessionId:string;
-  try{const payload=authorization.split(' ')[1].split('.')[1].replace(/-/g,'+').replace(/_/g,'/');sessionId=JSON.parse(atob(payload)).session_id;}catch{return reply({error:'La sesión no es válida.'},401);}
+  let sessionId:string,claims:unknown;
+  try{const payload=authorization.split(' ')[1].split('.')[1].replace(/-/g,'+').replace(/_/g,'/');claims=JSON.parse(atob(payload));sessionId=(claims as {session_id:string}).session_id;}catch{return reply({error:'La sesión no es válida.'},401);}
   if(typeof sessionId!=='string'||!/^[0-9a-f-]{36}$/i.test(sessionId))return reply({error:'Inicia sesión nuevamente.'},401);
   const sessions=await sql`SELECT created_at FROM auth.sessions WHERE id=${sessionId}::uuid AND user_id=${user.id}::uuid`;
   if(!sessions[0]?.created_at)return reply({error:'La sesión venció. Inicia sesión nuevamente.'},401);
-  const identity:Identity={userId:user.id,email:user.email,displayName:user.email,sessionCreatedAt:new Date(sessions[0].created_at).toISOString()};
+  const identity:Identity={userId:user.id,email:user.email,displayName:user.email,sessionCreatedAt:new Date(sessions[0].created_at).toISOString(),authenticationMethod:sessionAuthentication(claims)};
   const path=new URL(req.url).pathname.split('/').filter(Boolean).at(-1);
   if(!['state','mutate','import','template','auth-status','credentials','password-change'].includes(path||''))return reply({error:'Recurso no encontrado.'},404);
   if((['state','template','auth-status'].includes(path!)&&req.method!=='GET')||(['mutate','import','credentials','password-change'].includes(path!)&&req.method!=='POST'))return reply({error:'Método no permitido.'},405);
@@ -49,8 +50,8 @@ Deno.serve(async(req:Request)=>{
    return await fn(createService(db,identity));
   });
   const credentials=createCredentialService(credentialRun,{
-   create:async(email,password)=>{const {data,error}=await adminAuth().createUser({email,password,email_confirm:true});if(error||!data.user?.id)throw new Error('Auth no pudo crear la cuenta.');return data.user.id;},
-   update:async(id,password)=>{const {error}=await adminAuth().updateUserById(id,{password});if(error)throw new Error('Auth no pudo actualizar la contraseña.');}
+   create:async(email,password)=>{const {data,error}=await adminAuth().createUser({email,...(password===undefined?{}:{password}),email_confirm:true});if(error)throw error;if(!data.user?.id)throw new Error('Auth no pudo crear la cuenta.');return data.user.id;},
+   update:async(id,password)=>{const {error}=await adminAuth().updateUserById(id,{password});if(error)throw error;}
   });
   if(path==='auth-status')return reply(await credentials.status());
   if(path==='password-change')return reply(await credentials.change(body.password,body.confirmation));
@@ -73,7 +74,10 @@ Deno.serve(async(req:Request)=>{
   });
   if(path==='mutate'&&body.action==='save'&&body.entity==='user'){
    const target=await credentialRun(async s=>{const a=await s.actor();if(!a.permissions.includes('users.write'))throw Object.assign(new Error('Tu perfil no permite administrar usuarios.'),{status:403});return await s.one('SELECT id,active FROM users WHERE id=?',[(result as {id:string}).id]);});
-   if(target?.active)await credentials.manage('provision',target.id,undefined,true);
+   if(target?.active){
+    try{const access=await credentials.manage(body.data?.access_method==='provider'?'provision-provider':'provision',target.id,undefined,true);return reply({...result as object,access});}
+    catch(error:any){if(!['ACCOUNT_PROVISIONING_FAILED','AUTH_PASSWORD_POLICY'].includes(error.code))throw error;return reply({...result as object,access_pending:true,access_error:error.message,access_error_code:error.code});}
+   }
   }
   return reply(result);
  }catch(e:any){

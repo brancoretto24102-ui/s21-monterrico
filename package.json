@@ -10,7 +10,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node --experimental-strip-types tests/domain.test.ts && node --experimental-strip-types tests/server.test.ts && node --experimental-strip-types tests/export.test.ts && node tests/pwa.test.mjs && node --experimental-strip-types tests/credentials.test.ts",
+    "test": "node --experimental-strip-types tests/domain.test.ts && node --experimental-strip-types tests/server.test.ts && node --experimental-strip-types tests/export.test.ts && node tests/pwa.test.mjs && node --experimental-strip-types tests/oauth.test.ts && node --experimental-strip-types tests/credentials.test.ts",
     "check:public": "node scripts/check-public.mjs"
   },
   "dependencies": {
