@@ -1,6 +1,6 @@
 import {type Row,DEFAULT_TYPES,PERMISSIONS,parseJSON,currentMonth,previousMonth,validateMonth,validateReport,valueAt,inScope,can} from './domain.ts';
 import type {Prepared,Database} from './database.ts';
-export type Identity={userId:string,email:string,displayName:string,sessionCreatedAt?:string};
+export type Identity={userId:string,email:string,displayName:string,sessionCreatedAt?:string,authenticationMethod?:'password'|'oauth'};
 export function createService(db:Database,identity:Identity){
  const database=()=>db;
 class ApiError extends Error {status:number;constructor(message:string,status=400){super(message);this.status=status;}}
@@ -26,11 +26,12 @@ async function actor(allowPasswordChange=false):Promise<Row>{
  let u=await one('SELECT * FROM users WHERE subject=? OR (subject IS NULL AND email=?)',[identity.userId,email]);
  if(!u||!u.active)throw new ApiError('Tu cuenta todavía no tiene acceso a S-21. Contacta al administrador.',403);
  if(u.password_not_before&&(!identity.sessionCreatedAt||new Date(identity.sessionCreatedAt).getTime()<new Date(u.password_not_before).getTime()))throw new ApiError('Tu acceso fue actualizado. Inicia sesión nuevamente.',401);
- if(!allowPasswordChange&&(u.must_change_password||u.credential_state&&u.credential_state!=='ready'))throw Object.assign(new ApiError('Debes crear tu nueva contraseña antes de ingresar.',423),{code:'PASSWORD_CHANGE_REQUIRED'});
+ const external=identity.authenticationMethod==='oauth';
+ if(!allowPasswordChange&&!external&&(u.must_change_password||u.credential_state&&u.credential_state!=='ready'))throw Object.assign(new ApiError('Debes crear tu nueva contraseña antes de ingresar.',423),{code:'PASSWORD_CHANGE_REQUIRED'});
  if(u.subject&&u.subject!==identity.userId)throw new ApiError('La cuenta está vinculada a otra identidad.',403);
  if(!u.subject){await statement('UPDATE users SET subject=? WHERE id=? AND subject IS NULL',[identity.userId,u.id]).run();u.subject=identity.userId;}
  const profile=await one('SELECT * FROM profiles WHERE id=?',[u.profile_id]);
- return {...u,permissions:parseJSON(profile?.permissions,[]),groups:parseJSON(u.groups_json,[]),profile_name:profile?.name||'Sin perfil'};
+ return {...u,authentication_method:external?'oauth':'password',permissions:parseJSON(profile?.permissions,[]),groups:parseJSON(u.groups_json,[]),profile_name:profile?.name||'Sin perfil'};
 }
 function requirePermission(a:Row,p:string){if(!can(a,p))throw new ApiError('Tu perfil no permite esta operación.',403);}
 function requireScope(a:Row,g:string|null){if(!inScope(a,g))throw new ApiError('Este grupo está fuera de tu ámbito autorizado.',403);}
@@ -49,6 +50,10 @@ async function state(a:Row){
   rows('SELECT * FROM issues'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs),
   can(a,'audit')?rows('SELECT * FROM audit ORDER BY at DESC LIMIT 500'):Promise.resolve([]),can(a,'import')?rows('SELECT * FROM imports ORDER BY created_at DESC'):Promise.resolve([])
  ]);
+ if(can(a,'users.write')&&us.some(u=>u.credential_state==='error')){
+  const failures=await rows("SELECT entity_id,after_json FROM audit WHERE entity='users' AND action=? ORDER BY at DESC LIMIT 500",['Error al preparar acceso']);
+  for(const u of us)if(u.credential_state==='error'){const failure=failures.find(f=>f.entity_id===u.id);if(failure)u.access_error=parseJSON<Row>(failure.after_json,{}).message;}
+ }
  if(!can(a,'comments.read')){
   const scrub=(value:any):any=>Array.isArray(value)?value.map(scrub):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([key,v])=>[key,key==='comment'?'':scrub(v)])):value;
   for(const r of reps)r.comment='';for(const item of is)item.details=json(scrub(parseJSON(item.details,{})));for(const item of logs){item.before_json=json(scrub(parseJSON(item.before_json,null)));item.after_json=json(scrub(parseJSON(item.after_json,null)));}

@@ -19,10 +19,11 @@ const owner:Identity={userId:'owner-auth',email:'owner@example.test',displayName
 await service(owner).defaults();
 await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',['owner-auth',owner.email]);
 await service(owner).statement('INSERT INTO users(id,subject,email,name,profile_id) VALUES(?,?,?,?,?)',['owner','owner-auth',owner.email,'Administrador','admin']).run();
-let now='2026-11-16T14:00:00.000Z',failNext=false;const passwords=new Map<string,string>(),calls:string[]=[];
+let now='2026-11-16T14:00:00.000Z',failNext=false,strictPolicy=false;const passwords=new Map<string,string>(),calls:string[]=[];
+const checkProviderPolicy=(password?:string)=>{if(strictPolicy&&password!==undefined&&(password.length<12||!/[A-Z]/.test(password)||!/[a-z]/.test(password)||!/[0-9]/.test(password)||!/[!@#$%]/.test(password)))throw Object.assign(Error('Password should be at least 12 characters. Password should contain at least one character of each required class.'),{code:'weak_password'});};
 const auth:AuthAdmin={
- create:async(email,password)=>{if(failNext){failNext=false;throw Error('Auth test failure');}const id=crypto.randomUUID();await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[id,email]);passwords.set(id,password);calls.push('create');return id;},
- update:async(id,password)=>{if(failNext){failNext=false;throw Error('Auth test failure');}passwords.set(id,password);calls.push('update');}
+ create:async(email,password)=>{checkProviderPolicy(password);if(failNext){failNext=false;throw Error('Auth test failure');}const id=crypto.randomUUID();await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[id,email]);if(password!==undefined)passwords.set(id,password);calls.push(password===undefined?'create-external':'create');return id;},
+ update:async(id,password)=>{checkProviderPolicy(password);if(failNext){failNext=false;throw Error('Auth test failure');}passwords.set(id,password);calls.push('update');}
 };
 const credentials=(who:Identity)=>{const run:CredentialRun=async fn=>await pg.transaction(tx=>fn(service(who,tx)));return createCredentialService(run,auth,()=>now);};
 const save=async(data:any)=>pg.transaction(async tx=>{const s=service(owner,tx);const result=await s.mutation(await s.actor(),{action:'save',entity:'user',data});assert('id' in result);return {id:String(result.id)};});
@@ -81,4 +82,30 @@ await service(owner).statement('INSERT INTO profiles(id,name,permissions) VALUES
 await service(owner).statement('INSERT INTO users(id,subject,email,name,profile_id) VALUES(?,?,?,?,?)',['operator','operator-auth','operator@example.test','Operador','access-manager']).run();
 await assert.rejects(()=>credentials({userId:'operator-auth',email:'operator@example.test',displayName:'Operador'}).remove('owner',1),/al menos un administrador/);
 const logs=JSON.stringify(await service(owner).rows('SELECT * FROM audit'));assert(!logs.includes('Ab1!xy')&&!logs.includes('Nueva2!')&&!logs.includes(TEMP_PASSWORD));
+// Reproduce the hosted policy that rejected the initial numeric password.
+strictPolicy=true;
+const external=await save({email:'external@example.test',name:'Ingreso externo',profile_id:'encargado',groups_json:'["G1"]',active:1});
+await assert.rejects(()=>credentials(owner).manage('provision',external.id,1),(e:any)=>e.code==='AUTH_PASSWORD_POLICY'&&e.message.includes('12'));
+let externalUser=(await service(owner).one('SELECT * FROM users WHERE id=?',[external.id]))!;assert.equal(externalUser.credential_state,'error');
+const errorState=await service(owner).state(await service(owner).actor());assert(errorState.users.find(u=>u.id===external.id)!.access_error.includes('mínimo 12'));
+const providerAccess=await credentials(owner).manage('provision-provider',external.id,externalUser.version);assert.equal(providerAccess.provider_access,true);
+externalUser=(await service(owner).one('SELECT * FROM users WHERE id=?',[external.id]))!;assert.equal(externalUser.credential_state,'ready');assert.equal(externalUser.must_change_password,0);assert(!passwords.has(externalUser.subject));assert.equal(calls.at(-1),'create-external');
+const oauthIdentity:Identity={userId:externalUser.subject,email:externalUser.email,displayName:'Externo',sessionCreatedAt:'2026-11-16T14:04:00Z',authenticationMethod:'oauth'};
+assert.equal((await credentials(oauthIdentity).status()).must_change_password,false);assert.deepEqual((await service(oauthIdentity).actor()).groups,['G1']);
+await assert.rejects(()=>credentials(oauthIdentity).manage('provision-provider','owner',1),(e:any)=>e.status===403);
+await assert.rejects(()=>service({...oauthIdentity,userId:'unknown',email:'unknown@example.test'}).actor(),(e:any)=>e.status===403);
+await assert.rejects(()=>service({...oauthIdentity,sessionCreatedAt:'2026-11-16T13:00:00Z'}).actor(),(e:any)=>e.status===401);
+// A provider login may enter, but must not unlock the known default password.
+strictPolicy=false;const protectedAccount=await save({email:'protected@example.test',name:'Cambio pendiente',profile_id:'consulta',active:1});await credentials(owner).manage('provision',protectedAccount.id,1);
+let protectedUser=(await service(owner).one('SELECT * FROM users WHERE id=?',[protectedAccount.id]))!;const protectedIdentity:Identity={userId:protectedUser.subject,email:protectedUser.email,displayName:protectedUser.name,sessionCreatedAt:'2026-11-16T14:04:00Z'};
+const callsBeforeLink=calls.length;await credentials(owner).manage('provision-provider',protectedAccount.id,protectedUser.version);assert.equal(calls.length,callsBeforeLink);assert.equal(passwords.get(protectedUser.subject),TEMP_PASSWORD);
+await assert.rejects(()=>service(protectedIdentity).actor(),(e:any)=>e.status===423);assert.equal((await credentials({...protectedIdentity,authenticationMethod:'oauth'}).status()).must_change_password,false);await service({...protectedIdentity,authenticationMethod:'oauth'}).actor();
+protectedUser=(await service(owner).one('SELECT * FROM users WHERE id=?',[protectedAccount.id]))!;assert.equal(protectedUser.must_change_password,1);
+// An Auth account created before a failed linking step may still have the known default.
+const interrupted=await save({email:'interrupted@example.test',name:'Alta interrumpida',profile_id:'consulta',active:1});
+await pg.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',['interrupted-auth','interrupted@example.test']);passwords.set('interrupted-auth',TEMP_PASSWORD);
+await service(owner).statement("UPDATE users SET credential_state='error',credential_operation='provision' WHERE id=?",[interrupted.id]).run();
+await credentials(owner).manage('provision-provider',interrupted.id,1);
+const interruptedIdentity:Identity={userId:'interrupted-auth',email:'interrupted@example.test',displayName:'Alta interrumpida'};
+await assert.rejects(()=>service(interruptedIdentity).actor(),(e:any)=>e.status===423);await service({...interruptedIdentity,authenticationMethod:'oauth'}).actor();
 await pg.close();console.log('PASS: contraseña inicial, requisitos explícitos y símbolos, confirmación, sesiones, permisos, restablecimiento, eliminación de acceso S-21, conservación de Auth e informes y auditoría sin contraseñas.');

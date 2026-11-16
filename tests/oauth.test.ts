@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {createClient} from '@supabase/supabase-js';
+import {createOAuthStorage,loginProviders,OAUTH_STORAGE_KEY,parseOAuthReturn,providerOptions} from '../lib/oauth.ts';
+import {sessionAuthentication,accessFailure} from '../supabase/functions/s21-api/session-auth.ts';
+
+const persisted=new Map<string,string>();let clock=1000;
+const backing={getItem:(key:string)=>persisted.get(key)??null,setItem:(key:string,value:string)=>{persisted.set(key,value);},removeItem:(key:string)=>{persisted.delete(key);}};
+const storage=createOAuthStorage(()=>backing,()=>clock),verifier=OAUTH_STORAGE_KEY+'-flow-test-code-verifier';
+storage.setItem(OAUTH_STORAGE_KEY,'synthetic-session');assert.equal(persisted.size,0);
+storage.setItem(verifier,'synthetic-verifier');assert.equal(persisted.size,1);
+const returned=createOAuthStorage(()=>backing,()=>clock);assert.equal(returned.getItem(OAUTH_STORAGE_KEY),null);assert.equal(returned.getItem(verifier),'synthetic-verifier');
+returned.removeItem(verifier);assert.equal(storage.getItem(verifier),null);
+storage.setItem(verifier,'expires');clock+=600001;assert.equal(storage.getItem(verifier),null);assert.equal(persisted.size,0);
+storage.clearSession();assert.equal(storage.getItem(OAUTH_STORAGE_KEY),null);
+const blocked=createOAuthStorage(()=>{throw Error('Storage unavailable');});assert.throws(()=>blocked.setItem(verifier,'test'),/almacenamiento/);assert.equal(blocked.getItem(verifier),null);
+const google=providerOptions('google','https://example.test','/s21-monterrico/');assert.equal(google.options.redirectTo,'https://example.test/s21-monterrico/');assert.equal(google.options.scopes,'openid email profile');
+assert.equal(providerOptions('azure','https://example.test','/s21-monterrico/').options.scopes,'email');assert.throws(()=>providerOptions('google','https://example.test','https://other.test'),/Destino/);
+const result=parseOAuthReturn('https://example.test/s21-monterrico/?code=synthetic&sb_flow_id=one&month=2026-10');assert.equal(result!.code,'synthetic');assert.equal(result!.flowId,'one');assert.equal(result!.cleanPath,'/s21-monterrico/?month=2026-10');
+const cancelled=parseOAuthReturn('https://example.test/s21-monterrico/?error=access_denied&error_description=private-detail');assert.equal(cancelled!.error,'access_denied');assert.equal(cancelled!.cleanPath,'/s21-monterrico/');assert.equal(parseOAuthReturn('https://example.test/s21-monterrico/'),null);
+assert.equal(parseOAuthReturn('https://example.test/s21-monterrico/#error=access_denied&error_description=private-detail')!.error,'access_denied');assert.equal(parseOAuthReturn('https://example.test/s21-monterrico/#access_token=synthetic')!.cleanPath,'/s21-monterrico/');
+assert.deepEqual(loginProviders({external:{google:true,azure:false}}),{google:true,azure:false});assert.deepEqual(loginProviders({external:{google:'true',azure:1}}),{google:false,azure:false});
+assert.equal(sessionAuthentication({amr:[{method:'oauth'}]}),'oauth');assert.equal(sessionAuthentication({amr:[{method:'password'}],app_metadata:{provider:'google'},user_metadata:{provider:'google'}}),'password');assert.equal(sessionAuthentication({user_metadata:{amr:[{method:'oauth'}]}}),'password');assert.equal(sessionAuthentication(null),'password');
+const policy=accessFailure({code:'weak_password',message:'Password should be at least 12 characters.'});assert.equal(policy.code,'AUTH_PASSWORD_POLICY');assert(policy.message.includes('12'));assert(policy.message.includes('Preparar Google / Microsoft'));assert(!policy.message.includes('1234567890'));
+assert(accessFailure({code:'weak_password'},true).message.includes('repítela'));
+// Exercise the installed SDK's PKCE storage and callback with a synthetic Auth response.
+persisted.clear();clock=1000;
+const sdkOptions={auth:{storageKey:OAUTH_STORAGE_KEY,storage:createOAuthStorage(()=>backing,()=>clock),persistSession:true,flowType:'pkce' as const,autoRefreshToken:false,detectSessionInUrl:false}};
+const begin=createClient('https://oauth.example.test','synthetic-publishable',sdkOptions);
+const started=await begin.auth.signInWithOAuth({...google,options:{...google.options,skipBrowserRedirect:true}});assert.equal(started.error,null);
+const authorize=new URL(started.data.url!);assert.equal(authorize.searchParams.get('code_challenge_method'),'s256');assert(authorize.searchParams.get('code_challenge'));
+const redirect=new URL(authorize.searchParams.get('redirect_to')!);assert.equal(redirect.href,'https://example.test/s21-monterrico/');const flowId=started.data.flowId;assert(flowId);assert(persisted.size>0);
+let exchanges=0;
+const returnedStorage=createOAuthStorage(()=>backing,()=>clock);
+const returnedClient=createClient('https://oauth.example.test','synthetic-publishable',{...sdkOptions,auth:{...sdkOptions.auth,storage:returnedStorage},global:{fetch:async(_input,init)=>{
+ exchanges++;const body=JSON.parse(String(init?.body));assert.equal(body.auth_code,'synthetic-code');assert(typeof body.code_verifier==='string'&&body.code_verifier.length>32);
+ return new Response(JSON.stringify({access_token:'synthetic-access',refresh_token:'synthetic-refresh',expires_in:3600,token_type:'bearer',user:{id:'synthetic-user',email:'test@example.test'}}),{status:200,headers:{'Content-Type':'application/json'}});
+}}});
+const exchanged=await returnedClient.auth.exchangeCodeForSession('synthetic-code',{flowId:flowId!});assert.equal(exchanged.error,null);assert.equal(exchanges,1);assert.equal(persisted.size,0);assert((await returnedClient.auth.getSession()).data.session);
+const afterReload=createClient('https://oauth.example.test','synthetic-publishable',{...sdkOptions,auth:{...sdkOptions.auth,storage:createOAuthStorage(()=>backing,()=>clock)}});assert.equal((await afterReload.auth.getSession()).data.session,null);
+console.log('PASS: retorno OAuth seguro, PKCE temporal, sesión en memoria, proveedores disponibles, permiso OAuth derivado de AMR verificado y errores de política claros.');
