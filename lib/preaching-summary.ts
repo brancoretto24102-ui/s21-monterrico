@@ -1,4 +1,4 @@
-import {computeDashboard,parseJSON,valueAt} from './domain.ts';
+import {computeDashboard,parseJSON,typeVersion,valueAt} from './domain.ts';
 import type {Row} from './domain.ts';
 
 export const PREACHING_BREAKDOWN=[
@@ -11,10 +11,12 @@ export const PREACHING_BREAKDOWN=[
 ] as const;
 export type PreachingTotals={active:number,reports:number,participants:number,hours:number,courses:number,missingHours:number,missingCourses:number};
 const empty=():PreachingTotals=>({active:0,reports:0,participants:0,hours:0,courses:0,missingHours:0,missingCourses:0});
+const totalKeys=Object.keys(empty()) as (keyof PreachingTotals)[];
 const amount=(value:unknown)=>{const n=Number(value);return Number.isFinite(n)&&n>=0?n:0;};
-function combine(items:PreachingTotals[]):PreachingTotals{
- const total=empty();for(const item of items)for(const key of Object.keys(total) as (keyof PreachingTotals)[])total[key]+=item[key];return total;
+function add(total:PreachingTotals,item:PreachingTotals){
+ for(const key of totalKeys)total[key]+=item[key];return total;
 }
+function combine(items:PreachingTotals[]):PreachingTotals{return items.reduce(add,empty());}
 
 /** Every publisher/month contributes once. Drafts and unresolved conflicting duplicates do not count. */
 export function receivedSummaryReports(reports:Row[]){
@@ -34,24 +36,38 @@ export function computePreachingSummary(data:Row,filters:Row){
  const people:Row[]=data.publishers||[],histories:Row[]=data.histories||[],catalog:Row[]=data.types||[];
  const reports=receivedSummaryReports(dashboard.reportList);
  const reportIndex=new Map(reports.map(report=>[report.publisher_id+'/'+report.month,report]));
- const typeOf=(person:Row|undefined,month:string,report?:Row)=>String(report?.type_id||(person?valueAt(person,'preaching',month,histories):'')||'').trim().toUpperCase();
+ const groups={publishers:empty(),auxiliary:empty(),regular:empty(),special:empty()};
+ const classification=(person:Row|undefined,month:string,report?:Row)=>{
+  const id=String(report?.type_id||(person?valueAt(person,'preaching',month,histories):'')||'').trim().toUpperCase();
+  const type=typeVersion(catalog.find(type=>type.id===id),month),flag=report?.counts_hours??type?.counts_hours;
+  const counts=flag===1||flag===true?true:flag===0||flag===false?false:undefined;
+  return {id,counts};
+ };
+ // Official categories depend first on whether hours count in that month.
+ // The six dashboard cards keep the publisher's ministry type independently.
+ const category=(id:string,counts:boolean|undefined):PreachingTotals=>{
+  if(counts===false)return groups.publishers;
+  if(counts===true){
+   if(id==='PA'||id==='PAC')return groups.auxiliary;
+   if(id==='PR')return groups.regular;
+   if(id==='PE'||id==='MIS')return groups.special;
+  }
+  return unknown;
+ };
  for(const report of reports){
-  const person=people.find(person=>person.id===report.publisher_id),id=typeOf(person,report.month,report),target=byId.get(id)||unknown;
-  target.reports++;if(report.participation==='SI')target.participants++;
-  const type=catalog.find(type=>type.id===id);
-  const counts=report.counts_hours==null?!!type?.counts_hours:report.counts_hours===1||report.counts_hours===true;
-  if(id!=='PUB'&&counts){target.hours+=amount(report.hours);if(report.hours==null&&report.participation==='SI')target.missingHours++;}
-  target.courses+=amount(report.courses);if(report.courses==null)target.missingCourses++;
+  const person=people.find(person=>person.id===report.publisher_id),{id,counts}=classification(person,report.month,report);
+  const totals:PreachingTotals={...empty(),reports:1,participants:report.participation==='SI'?1:0,
+   hours:counts===true?amount(report.hours):0,courses:amount(report.courses),
+   missingHours:counts===true&&report.hours==null&&report.participation==='SI'?1:0,missingCourses:report.courses==null?1:0};
+  const type=byId.get(id);if(type)add(type,totals);
+  add(category(id,counts),totals);
  }
  const activeRoster:Row[]=latest?dashboard.roster.filter(person=>valueAt(person,'status',latest,histories)==='ACTIVO'):[];
- for(const person of activeRoster){const id=typeOf(person,latest,reportIndex.get(person.id+'/'+latest));(byId.get(id)||unknown).active++;}
- const get=(id:string)=>byId.get(id)!;
- const groups={
-  publishers:combine([get('PUB')]),
-  auxiliary:combine([get('PA'),get('PAC')]),
-  regular:combine([get('PR')]),
-  special:combine([get('PE'),get('MIS')])
- };
+ for(const person of activeRoster){
+  const {id,counts}=classification(person,latest,reportIndex.get(person.id+'/'+latest));
+  const type=byId.get(id);if(type)type.active++;
+  category(id,counts).active++;
+ }
  return {
   types,unknown,groups,
   official:combine([groups.publishers,groups.auxiliary,groups.regular]),

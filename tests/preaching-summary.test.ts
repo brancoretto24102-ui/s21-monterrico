@@ -28,7 +28,7 @@ assert.equal(summary.groups.auxiliary.hours,50);
 assert.equal(summary.groups.auxiliary.courses,3);
 assert.equal(summary.groups.regular.reports,1);
 assert.equal(summary.groups.regular.hours,50);
-assert.equal(summary.groups.publishers.hours,0,'Normal nunca suma horas, aun con un valor heredado');
+assert.equal(summary.groups.publishers.hours,0,'Quien no contabiliza horas no suma un valor heredado de horas');
 assert.equal(summary.official.reports,4);
 assert.equal(summary.official.hours,100);
 assert.equal(summary.official.courses,12);
@@ -102,9 +102,73 @@ assert.equal(partial.official.courses,0);
 assert.equal(partial.official.missingHours,1,'Cero se distingue de horas sin dato');
 assert.equal(partial.official.missingCourses,1,'Cero se distingue de cursos sin dato');
 assert.equal(partial.unknown.active,1);assert.equal(partial.unknown.reports,1);
-assert.equal(partial.official.reports,2,'Una clasificación desconocida no se convierte en Normal');
+assert.equal(partial.official.reports,2,'Un tipo que contabiliza horas sin categoría oficial queda excluido');
 assert.equal(partial.active,3);
 const noParticipation=computePreachingSummary(base([person('no','PUB')],[report('no','PUB',null,0,{participation:'NO'})]),filters);
 assert.equal(noParticipation.groups.publishers.reports,1,'Recibir un informe y participar son métricas diferentes');
 assert.equal(noParticipation.groups.publishers.participants,0);
-console.log('PASS: seis tipos, agrupación oficial, especiales y misioneros internos, vigencias y fotos mensuales, filtros, meses cerrados, duplicados y datos vacíos.');
+
+const nonHourlyIds=[...typeIds,'UNLISTED'];
+const nonHourlyData=base([
+ ...nonHourlyIds.map(id=>person('nohours-'+id,id)),person('regular-zero','PR')
+],[
+ ...nonHourlyIds.map((id,index)=>report('nohours-'+id,id,index%2?null:999,index+1,{counts_hours:id==='MIS'?false:0})),
+ report('regular-zero','PR',0,8)
+]);
+const nonHourly=computePreachingSummary(nonHourlyData,filters);
+assert.equal(nonHourly.groups.publishers.reports,7,'Publicadores incluye todos los informes que no contabilizan horas, independientemente del tipo');
+assert.equal(nonHourly.groups.publishers.active,7);
+assert.equal(nonHourly.groups.publishers.courses,28);
+assert.equal(nonHourly.groups.publishers.hours,0);
+assert.equal(nonHourly.groups.publishers.missingHours,0,'Horas vacías no son un pendiente para quien no las contabiliza');
+assert.equal(nonHourly.groups.auxiliary.reports,0);
+assert.equal(nonHourly.groups.regular.reports,1,'Un regular con cero horas conserva su categoría cuando sí contabiliza horas');
+assert.equal(nonHourly.internal.reports,0,'Cada informe aparece en una sola categoría del resumen');
+assert.equal(nonHourly.official.reports,8);
+assert.equal(nonHourly.official.courses,36);
+assert.equal(nonHourly.unknown.reports,0,'Una foto explícita de no contabilizar horas permite incluir el informe sin un tipo de catálogo');
+assert.equal(nonHourly.types.find(type=>type.id==='PR')?.reports,2,'El dashboard sigue desglosando por el tipo del informe');
+
+const catalogWithoutHours={
+ ...base([person('catalog-nohours','CUSTOM'),person('catalog-without-report','CUSTOM')],[
+  report('catalog-nohours','CUSTOM',null,2,{counts_hours:undefined})
+ ]),
+ types:[...DEFAULT_TYPES,{id:'CUSTOM',name:'Sin horas',counts_hours:0}]
+};
+const catalogSummary=computePreachingSummary(catalogWithoutHours,filters);
+assert.equal(catalogSummary.groups.publishers.reports,1);
+assert.equal(catalogSummary.groups.publishers.active,2,'Sin informe, el padrón se clasifica con la configuración vigente');
+assert.equal(catalogSummary.official.courses,2);
+assert.equal(catalogSummary.unknown.reports,0);
+
+const monthlyFlags={
+ ...base([person('versioned','PR'),person('versioned-no-report','PR'),person('snapshot-counted','PR')],[
+  report('versioned','PR',777,2,{month:'2026-09',counts_hours:null}),
+  report('versioned','PR',20,3,{counts_hours:undefined}),
+  report('snapshot-counted','PR',30,4,{month:'2026-09',counts_hours:true})
+ ]),
+ types:DEFAULT_TYPES.map(type=>type.id==='PR'?{...type,versions:JSON.stringify([
+  {since:'2026-09',counts_hours:0},{since:'2026-10',counts_hours:1}
+ ])}:type)
+};
+const changedFlag=computePreachingSummary(monthlyFlags,{...filters,month:''});
+assert.equal(changedFlag.groups.publishers.reports,1,'Se respeta el indicador histórico cuando el informe no tiene foto del indicador');
+assert.equal(changedFlag.groups.publishers.courses,2);
+assert.equal(changedFlag.groups.regular.reports,2);
+assert.equal(changedFlag.groups.regular.hours,50,'La foto del informe prevalece sobre la configuración del catálogo en ese mes');
+assert.equal(changedFlag.official.hours,50);
+assert.equal(changedFlag.official.courses,9);
+const septemberFlag=computePreachingSummary(monthlyFlags,{...filters,month:'2026-09'});
+assert.equal(septemberFlag.groups.publishers.active,2);
+assert.equal(septemberFlag.groups.regular.active,1);
+assert.equal(septemberFlag.groups.publishers.reports,1);
+assert.equal(septemberFlag.groups.regular.reports,1);
+
+const undefinedFlag=computePreachingSummary(base([person('undefined','MISSING')],[
+ report('undefined','MISSING',null,3,{counts_hours:null})
+]),filters);
+assert.equal(undefinedFlag.groups.publishers.reports,0,'Un indicador desconocido no se interpreta como no contabilizar horas');
+assert.equal(undefinedFlag.unknown.reports,1);
+assert.equal(undefinedFlag.official.reports,0);
+
+console.log('PASS: seis tipos, Publicadores sin horas, categorías excluyentes, indicador mensual e histórico, filtros, meses cerrados, duplicados y datos vacíos.');
