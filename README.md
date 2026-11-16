@@ -6,7 +6,7 @@ Gestión de publicadores, grupos, informes mensuales y exportaciones S-21. Inter
 
 ## Acceso y uso
 
-Ingresa con el mismo correo y contraseña de S-13 Monterrico. Los permisos de S-21 son independientes: el administrador autoriza cada correo, perfil y grupos. Guardar un usuario no crea contraseñas ni envía invitaciones. La sesión permanece en memoria; al recargar se solicita iniciar sesión nuevamente. No existe promoción automática del primer visitante.
+Ingresa con el mismo correo y contraseña de S-13 Monterrico. Los permisos de S-21 son independientes: el administrador autoriza cada correo, perfil y grupos. Guardar un usuario habilitado crea su acceso si no existía: contraseña inicial 1234567890 y cambio obligatorio. Las cuentas ya existentes conservan su contraseña al vincularse. No se envían invitaciones. La sesión permanece en memoria; al recargar se solicita iniciar sesión nuevamente. No existe promoción automática del primer visitante.
 
 - Maestros de publicadores, grupos, perfiles, clasificaciones, estados y predicación. Encargado y auxiliar vinculados a usuarios habilitados.
 - Recepción mensual por grupo: participación sí/no, cursos bíblicos, comentarios y horas cuando corresponde al tipo vigente. Los borradores, pendientes y la respuesta NO se distinguen.
@@ -63,3 +63,11 @@ El preset de envío crea, en orden, Grupo 1, Grupo 2, Grupo 3, Grupo 4, Grupo 5,
 El dashboard utiliza exclusivamente meses calendario terminados. El 16/11/2026 incluye septiembre y octubre en el año de servicio 2026-2027 y excluye noviembre de horas, cursos, participación, pendientes, metas y comentarios. El límite avanza al comenzar el mes siguiente. No reemplaza el cierre administrativo que bloquea la edición de informes.
 
 La web incluye manifiesto PWA, iconos PNG de 192 y 512 píxeles, icono maskable, compatibilidad de pantalla de inicio con iOS y un botón de instalación. Se puede instalar desde el menú de un navegador compatible. Requiere internet para iniciar sesión y trabajar con informes. El service worker conserva únicamente archivos públicos de la interfaz; no guarda respuestas de la API, datos de publicadores ni sesiones. Su ámbito y sus cachés están limitados a /s21-monterrico/ y no interfieren con S-13.
+
+## Alta y restablecimiento de contraseñas
+
+En Usuarios y perfiles, guardar un usuario habilitado completa su cuenta de Auth cuando todavía no existe. El primer ingreso utiliza 1234567890 y solo habilita la pantalla para definir y repetir la contraseña personal: mínimo seis caracteres, una mayúscula, una minúscula, un número y un carácter especial. Las mismas reglas se verifican en el servidor.
+
+El botón Crear acceso permite completar usuarios autorizados antes de esta mejora o reintentar una creación fallida. Restablecer contraseña está limitado al permiso users.write y vuelve a la contraseña inicial, exige otro cambio y bloquea las sesiones anteriores en S-21. Otro administrador debe restablecer la cuenta propia. Si esa cuenta también se utiliza en S-13, el cambio afecta su contraseña compartida; la interfaz lo advierte antes de confirmar.
+
+Los indicadores de cambio obligatorio y la fecha mínima de sesión están en el esquema privado s21. El servidor consulta la sesión autenticada y bloquea estado, informes, PDF, respaldos y mutaciones hasta completar el cambio. Tras cambiar la contraseña se inicia una sesión nueva: otras sesiones abiertas con la clave inicial no adquieren acceso a los datos. Las operaciones de Auth y los flags se coordinan para dejar el acceso bloqueado si falla una actualización. Las contraseñas no se escriben en las tablas de la aplicación, la auditoría ni los registros. Las credenciales administrativas se leen exclusivamente del entorno de Edge Functions.

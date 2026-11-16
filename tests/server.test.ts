@@ -8,6 +8,7 @@ process.on('uncaughtException',(e:any)=>{console.error('Prueba de servidor:',e.m
 const pg=new PGlite();
 const migration=fs.readdirSync('supabase/migrations').find(s=>s.endsWith('_s21_initial.sql'))!;
 await pg.exec(fs.readFileSync(`supabase/migrations/${migration}`,'utf8'));
+for(const next of fs.readdirSync('supabase/migrations').filter(s=>s.endsWith('.sql')&&s!==migration).sort())await pg.exec(fs.readFileSync(`supabase/migrations/${next}`,'utf8'));
 const identity={userId:'owner-auth',email:'owner@example.test',displayName:'Administrador de prueba'};
 const query=(client:any)=>(async(sql:string,args:any[])=>{const r=await client.query(sql,args);return {rows:r.rows,count:r.affectedRows??r.rows.length};});
 const db=createDatabase(query(pg)),service=createService(db,identity);
@@ -58,3 +59,4 @@ assert.equal(access.rows.length,16);assert(access.rows.every(t=>t.relrowsecurity
 const logs=await service.rows('SELECT * FROM audit');assert(logs.some(l=>l.action==='Corregir informe'));assert(logs.every(l=>l.at&&l.actor));
 await pg.close();
 console.log('Servidor PostgreSQL: permisos, ámbito de grupos, cierres, vigencias, campañas, correcciones, auditoría y versiones verificados.');
+
