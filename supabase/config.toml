@@ -1,0 +1,2 @@
+[functions.s21-api]
+verify_jwt = true
