@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {serviceYear,serviceMonths,previousMonth,valueAt,overlaps,validateReport,goalFor,typeVersion,DEFAULT_TYPES,computeDashboard,inScope,can} from '../lib/domain.ts';
+import {serviceYear,serviceMonths,previousMonth,valueAt,overlaps,validateReport,goalFor,typeVersion,DEFAULT_TYPES,computeDashboard,inScope,can,lastClosedMonth,closedReportingCutoff} from '../lib/domain.ts';
 assert.equal(serviceYear('2026-08'),2026);
 assert.equal(serviceYear('2026-09'),2027);
 assert.equal(serviceMonths(2027)[0],'2026-09');assert.equal(serviceMonths(2027)[11],'2027-08');
@@ -26,4 +26,13 @@ assert.equal(computeDashboard(data,{year:2026,month:'2026-05',cutoff:'2026-08-31
 assert.equal(computeDashboard(data,{year:2026,group:'G2',cutoff:'2026-08-31'}).received,0);
 assert(inScope({permissions:[],groups:['G1']},'G1'));assert(!inScope({permissions:[],groups:['G1']},'G2'));
 assert(inScope({permissions:['groups.all'],groups:[]},'G2'));assert(!can({permissions:['reports.write']},'reports.correct'));
+assert.equal(lastClosedMonth('2026-11-16'),'2026-10');assert.equal(closedReportingCutoff('2026-11-16'),'2026-10-31');
+assert.equal(lastClosedMonth('2027-01-01'),'2026-12');assert.equal(closedReportingCutoff('2024-03-01'),'2024-02-29');
+const openMonthData={publishers:[p],histories:[],types:DEFAULT_TYPES,reports:[{publisher_id:'p',group_id:'G1',month:'2026-09',type_id:'PR',counts_hours:1,hours:40,courses:2,participation:'SI',state:'submitted',quality:'[]'},{publisher_id:'p',group_id:'G1',month:'2026-10',type_id:'PR',counts_hours:1,hours:45,courses:3,participation:'SI',state:'submitted',quality:'[]'},{publisher_id:'p',group_id:'G1',month:'2026-11',type_id:'PR',counts_hours:1,hours:999,courses:999,participation:'SI',comment:'Mes abierto',state:'submitted',quality:'[]'}]};
+const closed=computeDashboard(openMonthData,{year:2027,cutoff:'2026-11-16',asOf:'2026-11-16'});
+assert.deepEqual(closed.months,['2026-09','2026-10']);assert.equal(closed.hours,85);assert.equal(closed.courses,5);assert.equal(closed.received,2);assert.equal(closed.pending,0);assert.equal(closed.expected,2);assert.equal(closed.goals[0].target,100);assert.equal(closed.goals[0].comments.length,0);
+assert.equal(computeDashboard(openMonthData,{year:2027,month:'2026-11',cutoff:'2027-08-31',asOf:'2026-11-16'}).received,0);
+assert.deepEqual(computeDashboard(openMonthData,{year:2027,cutoff:'2026-11-16',asOf:'2026-12-01'}).months,['2026-09','2026-10','2026-11']);
+assert.deepEqual(computeDashboard(openMonthData,{year:2027,cutoff:'2026-11-16',asOf:'2026-09-01'}).months,[]);
 console.log('PASS: calendario, vigencias, solapamientos, cero/vacío, validación, metas versionadas, cómputo histórico, filtros y alcance por grupo.');
+
