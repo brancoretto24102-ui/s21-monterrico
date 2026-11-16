@@ -16,7 +16,7 @@ Ingresa con el mismo correo y contraseña de S-13 Monterrico. Los permisos de S-
 - PDF individual y ZIP masivo: apodos, dos años por registro, corte y organización seleccionables. Plantilla y fuentes privadas disponibles solo con permiso de exportación.
 - Importación del Excel DATA/GRUPOS/HORAS con previsualización y revisión de conflictos; respaldos JSON.
 
-La carga de los registros originales es un paso independiente de la publicación del código. La importación está preparada; los datos del Excel no se han trasladado a este alojamiento.
+Los registros se administran en la base privada. Los archivos del Excel y los datos personales no se incluyen en el repositorio público.
 
 ## Arquitectura
 
@@ -47,6 +47,19 @@ Las pruebas usan PostgreSQL local mediante PGlite y datos sintéticos. Cubren pe
 
 La migración inicial crea el esquema, restricciones, catálogos y perfiles. En otra instalación deben autorizarse las cuentas iniciales y cargarse la plantilla y fuentes privadas por separado.
 
-Compilación, pruebas de dominio y PostgreSQL, revisión de publicación y dependencias de producción completadas. La comprobación autenticada del sitio requiere iniciar sesión. La migración de los registros originales está pendiente de autorización del propietario.
+Compilación, pruebas de dominio y PostgreSQL, revisión de publicación y dependencias de producción completadas. La comprobación autenticada del sitio requiere iniciar sesión. Las importaciones se verifican y registran por separado en la base privada.
 
 El asesor de Supabase informa de RLS sin políticas para las tablas privadas: corresponde a la denegación predeterminada. La configuración compartida de Auth conserva un aviso previo de comprobación de contraseñas filtradas; esta entrega no cambia la configuración global del proveedor.
+
+
+## Exportación para el superintendente
+
+Al entrar a Registros S-21 se debe elegir explícitamente Año 1 y Año 2 de servicio. Se muestran como rangos: 2025-2026 significa septiembre de 2025 a agosto de 2026, y 2026-2027 significa septiembre de 2026 a agosto de 2027. El primer registro va arriba y el segundo abajo, en A4. Se conserva el nombre completo dentro del formulario y APODO.pdf como archivo; los apodos repetidos en una carpeta llevan el código.
+
+El preset de envío crea, en orden, Grupo 1, Grupo 2, Grupo 3, Grupo 4, Grupo 5, Grupo 6, Grupo Precursores regulares, especiales y misioneros, e Inactivos. Cada publicador aparece una vez. Los inactivos tienen prioridad sobre el tipo de predicación y la organización utiliza las vigencias al corte.
+
+## Dashboard y aplicación móvil
+
+El dashboard utiliza exclusivamente meses calendario terminados. El 16/11/2026 incluye septiembre y octubre en el año de servicio 2026-2027 y excluye noviembre de horas, cursos, participación, pendientes, metas y comentarios. El límite avanza al comenzar el mes siguiente. No reemplaza el cierre administrativo que bloquea la edición de informes.
+
+La web incluye manifiesto PWA, iconos PNG de 192 y 512 píxeles, icono maskable, compatibilidad de pantalla de inicio con iOS y un botón de instalación. Se puede instalar desde el menú de un navegador compatible. Requiere internet para iniciar sesión y trabajar con informes. El service worker conserva únicamente archivos públicos de la interfaz; no guarda respuestas de la API, datos de publicadores ni sesiones. Su ámbito y sus cachés están limitados a /s21-monterrico/ y no interfieren con S-13.

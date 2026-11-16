@@ -1,11 +1,13 @@
 import {apiRequest} from '../src/api';
 import {Row,MONTHS,serviceMonths,valueAt,parseJSON} from './domain';
+import {buildExportPlan,S21_FOLDERS,serviceYearRange,validateExportYears,safeFileName as safe} from './export-plan';
+export {folderFor} from './export-plan';
 type Assets={template:Uint8Array,regular:Uint8Array,bold:Uint8Array};
-const safe=(s:string)=>s.replace(/[<>:"/\\|?*\x00-\x1f]/g,' ').trim();
 async function loadAssets():Promise<Assets>{
  const data=await apiRequest('template');const decode=(s:string)=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));return {template:decode(data.template),regular:decode(data.regular),bold:decode(data.bold)};
 }
 export async function generateS21(person:Row,data:Row,years:number[],cutoff:string,assets?:Assets){
+ const error=validateExportYears(years);if(error)throw Error(error);
  const {PDFDocument,rgb}=await import('pdf-lib');const fontkit=(await import('@pdf-lib/fontkit')).default;
  if(!assets)assets=await loadAssets();
  const doc=await PDFDocument.load(assets.template);doc.registerFontkit(fontkit);const regular=await doc.embedFont(assets.regular,{subset:true}),bold=await doc.embedFont(assets.bold,{subset:true});const page=doc.getPages()[0],H=page.getHeight();const annexes:Row[]=[];
@@ -33,18 +35,17 @@ export async function generateS21(person:Row,data:Row,years:number[],cutoff:stri
  if(annexes.length){let p=doc.addPage([595.2,841.9]),y=55;const heading=()=>{draw('OBSERVACIONES DEL REGISTRO S-21',42,55,16,bold,p);draw(person.alias,42,80,11,bold,p);draw(person.full_name,42,100,10,regular,p);};heading();y=135;
   for(const n of annexes){const ls=wrap(n.text,11,510);if(y+ls.length*15+55>795){p=doc.addPage([595.2,841.9]);heading();y=135;}draw(`Nota ${n.index} · ${n.month} · Año de servicio ${n.year}`,42,y,11,bold,p);y+=24;for(const line of ls){if(y>795){p=doc.addPage([595.2,841.9]);heading();y=135;}draw(line,42,y,11,regular,p);y+=15;}y+=22;}
  }
- doc.setTitle(`S-21 · ${person.alias} · ${years.join(' y ')}`);doc.setSubject(`Informes hasta ${cutoff}.`);return{bytes:await doc.save(),annexes:annexes.length};
-}
-export function folderFor(p:Row,data:Row,cutoff:string,mode:string){const at=cutoff.slice(0,7),status=valueAt(p,'status',at,data.histories),type=valueAt(p,'preaching',at,data.histories),group=data.groups.find((g:Row)=>g.id===valueAt(p,'group',at,data.histories))?.name||'Sin grupo';
- if(mode==='flat')return'';if(mode==='group')return safe(group);if(mode==='type')return safe(data.types.find((t:Row)=>t.id===type)?.name||type);if(mode==='status')return safe(data.catalogs.find((c:Row)=>c.id===status)?.name||status);
- if(status==='INACTIVO')return'Inactivos';if(status==='EXPULSADO')return'Expulsados';if(status==='FALLECIDO')return'Archivo/Fallecidos';if(['TRASLADADO','CAMBIADO'].includes(status))return'Archivo/Otra congregación';if(['PR','PE','MIS'].includes(type))return'Grupo Precursores regulares, especiales y misioneros';return safe(group);
+ doc.setTitle(`S-21 · ${person.alias} · ${years.map(serviceYearRange).join(' y ')}`);doc.setSubject(`Informes hasta ${cutoff}.`);return{bytes:await doc.save(),annexes:annexes.length};
 }
 export function saveDownload(blob:Blob,name:string){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
-export async function exportPdfs(data:Row,ids:string[],years:number[],cutoff:string,mode:string,onProgress:(n:number,total:number)=>void){const people=data.publishers.filter((p:Row)=>ids.includes(p.id)).sort((a:Row,b:Row)=>a.alias.localeCompare(b.alias,'es'));
+export async function exportPdfs(data:Row,ids:string[],years:number[],cutoff:string,mode:string,onProgress:(n:number,total:number)=>void){
+ const error=validateExportYears(years);if(error)throw Error(error);
+ const plan=buildExportPlan(data,ids,cutoff,mode),people=plan.map((r:Row)=>r.person);if(!people.length)throw Error('Selecciona al menos un publicador.');
  const assets=await loadAssets();
  if(people.length===1){const pdf=await generateS21(people[0],data,years,cutoff,assets);onProgress(1,1);return {blob:new Blob([pdf.bytes as BlobPart],{type:'application/pdf'}),filename:`${safe(people[0].alias)}.pdf`};}
- const JSZip=(await import('jszip')).default,zip=new JSZip(),counts:Row={},names=new Set<string>();let annexes=0;
- if(mode==='organized')for(const folder of [...Array.from({length:6},(_,i)=>`Grupo ${i+1}`),'Grupo Precursores regulares, especiales y misioneros','Inactivos'])zip.folder(folder);
- for(const [i,p] of people.entries()){const folder=folderFor(p,data,cutoff,mode),base=safe(p.alias),key=`${folder}/${base}`.toLowerCase(),name=names.has(key)?`${base} - ${p.code}`:base;names.add(key);const pdf=await generateS21(p,data,years,cutoff,assets);zip.file(`${folder?folder+'/':''}${name}.pdf`,pdf.bytes);counts[folder||'Raíz']=(counts[folder||'Raíz']||0)+1;annexes+=pdf.annexes?1:0;onProgress(i+1,people.length);await new Promise(r=>setTimeout(r,0));}
- const lines=['REGISTROS S-21 MONTER RICO'.replace('MONTER RICO','MONTERRICO'),`Generación: ${new Date().toLocaleString('es-PE',{timeZone:'America/Lima'})}`,`Años: ${years.join(', ')}`,`Fecha de corte: ${cutoff}`,`PDF: ${people.length}`,`Documentos con anexos: ${annexes}`,'',...Object.entries(counts).map(([k,v])=>`${k}: ${v}`),'','Los meses sin informe confirmado permanecen vacíos. Cero y vacío se conservan por separado.','Los totales suman horas numéricas contabilizables. Los créditos mencionados en notas no se suman nuevamente.','Los encabezados históricos sin evidencia de vigencia utilizan el maestro disponible y requieren revisión.','Las agrupaciones antiguas importadas del Excel pueden reflejar el grupo actual.','',...data.issues.filter((x:Row)=>x.state==='pending'&&ids.includes(x.publisher_id)).map((x:Row)=>`${people.find((p:Row)=>p.id===x.publisher_id)?.alias||''} · ${x.month||'Maestro'} · ${x.message}`)];zip.file('LEEME.txt','\ufeff'+lines.join('\n'));return{blob:await zip.generateAsync({type:'blob',compression:'DEFLATE'}),filename:`S21_${years.join('_')}_por_grupos.zip`};
+ const JSZip=(await import('jszip')).default,zip=new JSZip(),counts:Row=Object.fromEntries((mode==='organized'?S21_FOLDERS:[]).map(f=>[f,0])),annexNames:string[]=[];
+ if(mode==='organized')for(const folder of S21_FOLDERS)zip.folder(folder);
+ for(const [i,r] of plan.entries()){const pdf=await generateS21(r.person,data,years,cutoff,assets);zip.file(r.path,pdf.bytes);counts[r.folder||'Raíz']=(counts[r.folder||'Raíz']||0)+1;if(pdf.annexes)annexNames.push(r.path);onProgress(i+1,people.length);await new Promise(r=>setTimeout(r,0));}
+ const lines=['REGISTROS S-21 MONTERRICO',mode==='organized'?'Formato de envío al superintendente':'Exportación de registros',`Generación: ${new Date().toLocaleString('es-PE',{timeZone:'America/Lima'})}`,`Año 1 de servicio: ${serviceYearRange(years[0])}`,`Año 2 de servicio: ${serviceYearRange(years[1])}`,`Fecha de corte: ${cutoff.split('-').reverse().join('/')}`,`Último mes disponible: ${data.reports.map((r:Row)=>r.month).sort().at(-1)||'Sin informes'}`,`PDF: ${people.length}`,`Documentos con anexos: ${annexNames.length}`,'',...Object.entries(counts).map(([k,v])=>`${k}: ${v}`),'','Los meses sin informe confirmado permanecen vacíos. Cero y vacío se conservan por separado.','Los totales suman horas numéricas contabilizables. Los créditos mencionados en notas no se suman nuevamente.','Los encabezados históricos sin evidencia de vigencia utilizan el maestro disponible y requieren revisión.','Las agrupaciones antiguas importadas del Excel pueden reflejar el grupo actual.','','Datos personales faltantes:',...people.filter((p:Row)=>!p.birth_date||(p.baptized&&!p.baptism_date)).map((p:Row)=>`${p.alias}: ${[!p.birth_date?'nacimiento':'',p.baptized&&!p.baptism_date?'bautismo':''].filter(Boolean).join(', ')} en blanco.`),'','Documentos con anexos:',...annexNames,'','Observaciones pendientes:',...data.issues.filter((x:Row)=>x.state==='pending'&&ids.includes(x.publisher_id)).map((x:Row)=>`${people.find((p:Row)=>p.id===x.publisher_id)?.alias||''} · ${x.month||'Maestro'} · ${x.message}`)];zip.file('LEEME.txt','\ufeff'+lines.join('\n'));return{blob:await zip.generateAsync({type:'blob',compression:'DEFLATE'}),filename:`S21_${years.map(serviceYearRange).join('_')}_${mode==='organized'?'superintendente':'registros'}.zip`};
 }
+

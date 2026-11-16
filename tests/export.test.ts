@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {S21_FOLDERS,buildExportPlan,folderFor,serviceYearRange,validateExportYears} from '../lib/export-plan.ts';
+const person=(id:string,group='G1',type='PUB',status='ACTIVO',alias=id)=>({id,code:id,alias,group_id:group,preaching_type_id:type,status});
+const data={publishers:[person('INACTIVO','G1','PR','INACTIVO'),person('MISIONERO','G6','MIS'),person('ESPECIAL','G3','PE'),person('REGULAR','G1','PR'),person('2','G1','PUB','ACTIVO','MISMO APODO'),person('1','G1','PUB','ACTIVO','mismo apodo'),...Array.from({length:6},(_,i)=>person(`P${i+1}`,`G${i+1}`))],histories:[],groups:Array.from({length:6},(_,i)=>({id:`G${i+1}`,name:`Grupo ${i+1}`})),types:[],catalogs:[]};
+const ids=data.publishers.map(p=>p.id),plan=buildExportPlan(data,[...ids,ids[0]],'2026-10-31','organized');
+assert.equal(plan.length,ids.length);assert.equal(new Set(plan.map(p=>p.path.toLowerCase())).size,ids.length);
+assert.deepEqual([...new Set(plan.map(r=>r.folder))],S21_FOLDERS);
+assert.equal(plan.at(-1)?.folder,'Inactivos');assert.equal(folderFor(data.publishers[0],data,'2026-10-31','organized'),'Inactivos');
+assert(plan.filter(p=>p.folder===S21_FOLDERS[6]).every(p=>['PR','PE','MIS'].includes(p.person.preaching_type_id)));
+assert(plan.filter(p=>['1','2'].includes(p.person.id)).every(p=>p.filename.endsWith(` - ${p.person.code}.pdf`)));
+assert.equal(plan.find(p=>p.person.id==='P1')?.filename,'P1.pdf');
+assert.equal(serviceYearRange(2026),'2025-2026');assert.equal(serviceYearRange(2027),'2026-2027');
+assert(validateExportYears([0,0]));assert(validateExportYears([2026,2026]));assert(validateExportYears([2027,2026]));assert.equal(validateExportYears([2026,2027]),'');
+assert.throws(()=>buildExportPlan(data,['INEXISTENTE'],'2026-10-31','organized'),/Actualiza/);
+assert.throws(()=>folderFor(person('FALLECIDO','G1','PUB','FALLECIDO'),data,'2026-10-31','organized'),/otros estados/);
+const historical={...data,histories:[{publisher_id:'P1',kind:'preaching',value:'PR',start_month:'2026-09',end_month:'2026-10'}]};
+assert.equal(folderFor(data.publishers.find(p=>p.id==='P1')!,historical,'2026-10-31','organized'),S21_FOLDERS[6]);
+console.log('PASS: apodos, nombres repetidos, ocho carpetas en orden, clasificación al corte y selección de dos años.');

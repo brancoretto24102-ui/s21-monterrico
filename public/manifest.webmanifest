@@ -1,0 +1,18 @@
+{
+  "id": "/s21-monterrico/",
+  "name": "S-21 Monterrico",
+  "short_name": "S-21",
+  "description": "Publicadores, grupos e informes mensuales de Monterrico.",
+  "lang": "es-PE",
+  "start_url": "/s21-monterrico/",
+  "scope": "/s21-monterrico/",
+  "display": "standalone",
+  "background_color": "#fff6ed",
+  "theme_color": "#e96c25",
+  "prefer_related_applications": false,
+  "icons": [
+    {"src":"icons/app-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"icons/app-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"icons/maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
+  ]
+}
