@@ -8,6 +8,8 @@ import {passwordChecks,validateNewPassword} from '../supabase/functions/s21-api/
 
 for(const value of ['1234567890','ABC1!A','abc1!a','Abcdef!','Abc123','Ab1!'])assert(validateNewPassword(value,value));
 assert.equal(validateNewPassword('Ab1!xy','Ab1!xy'),'');assert(validateNewPassword('Ab1!xy','Ab1!xz'));assert.equal(passwordChecks('Áb1!xy').filter(c=>c.valid).length,5);
+const incomplete=validateNewPassword('abc','xyz');for(const expected of ['6 caracteres','mayúscula','número','carácter especial','! @ # $','coincidir'])assert(incomplete.includes(expected),expected);
+assert(!passwordChecks('Abc123 ').find(c=>c.id==='special')!.valid);assert(validateNewPassword('Abc123','').includes('Repite la nueva contraseña'));
 const pg=new PGlite();
 for(const file of fs.readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')).sort())await pg.exec(fs.readFileSync(`supabase/migrations/${file}`,'utf8'));
 await pg.exec('CREATE SCHEMA auth; CREATE TABLE auth.users(id text PRIMARY KEY,email text UNIQUE);');
@@ -50,6 +52,33 @@ const broken=await save({email:'broken@example.test',name:'Prueba error',profile
 failNext=true;await assert.rejects(()=>credentials(owner).manage('provision',broken.id,brokenUser!.version),(e:any)=>e.code==='ACCOUNT_PROVISIONING_FAILED');
 brokenUser=await service(owner).one('SELECT * FROM users WHERE id=?',[broken.id]);assert.equal(brokenUser!.credential_state,'error');assert.equal(brokenUser!.must_change_password,1);
 await credentials(owner).manage('provision',broken.id,brokenUser!.version);assert.equal((await service(owner).one('SELECT * FROM users WHERE id=?',[broken.id]))!.credential_state,'ready');
-const logs=JSON.stringify(await service(owner).rows('SELECT * FROM audit'));assert(!logs.includes('Ab1!xy')&&!logs.includes('Nueva2!')&&!logs.includes(TEMP_PASSWORD));
 await assert.rejects(()=>credentials(owner).manage('reset','owner',1),/Otro administrador/);
-await pg.close();console.log('PASS: contraseña inicial, reglas y confirmación, bloqueo de datos, cambio, sesiones anteriores, permisos, restablecimiento, fallos recuperables y auditoría sin contraseñas.');
+// Removing S-21 authorization must never delete the Auth identity shared with S-13.
+const target=(await service(owner).one('SELECT * FROM users WHERE id=?',[existing.id]))!;
+const sharedIdentity={userId:existingId,email:target.email,displayName:target.name};
+await assert.rejects(()=>credentials(sharedIdentity).remove(created.id,1),(e:any)=>e.status===403);
+await assert.rejects(()=>credentials(owner).remove('owner',1),/Otro administrador/);
+await assert.rejects(()=>credentials(owner).remove(existing.id,target.version-1),(e:any)=>e.status===409);
+await assert.rejects(()=>credentials(owner).remove('missing',1),(e:any)=>e.status===404);
+await service(owner).statement('INSERT INTO publishers(id,code,names,surnames,full_name,alias,gender,historical_since) VALUES(?,?,?,?,?,?,?,?)',['P-KEEP','P-KEEP','Prueba','Sintética','Prueba Sintética','Prueba','MASCULINO','2025-09']).run();
+await service(owner).statement('INSERT INTO reports(id,publisher_id,month,type_id,participation,updated_by,updated_at) VALUES(?,?,?,?,?,?,?)',['R-KEEP','P-KEEP','2026-10','PUB','SI',existing.id,now]).run();
+await service(owner).statement('UPDATE users SET publisher_id=? WHERE id=?',['P-KEEP',existing.id]).run();
+await service(owner).statement('UPDATE groups SET leader_id=?,assistant_id=? WHERE id=?',[existing.id,'owner','G1']).run();
+await service(owner).statement('UPDATE groups SET assistant_id=? WHERE id=?',[existing.id,'G2']).run();
+const authCallsBeforeDelete=calls.length;
+assert.deepEqual(await credentials(owner).remove(existing.id,target.version),{deleted:true,auth_account_preserved:true});
+assert.equal(await service(owner).one('SELECT * FROM users WHERE id=?',[existing.id]),undefined);
+await assert.rejects(()=>service(sharedIdentity).actor(),(e:any)=>e.status===403);
+assert.equal(calls.length,authCallsBeforeDelete);assert.equal(passwords.get(existingId),'Personal1!');
+assert.equal((await pg.query('SELECT * FROM auth.users WHERE id=$1',[existingId])).rows.length,1);
+const group1=(await service(owner).one('SELECT * FROM groups WHERE id=?',['G1']))!,group2=(await service(owner).one('SELECT * FROM groups WHERE id=?',['G2']))!;
+assert.equal(group1.leader_id,null);assert.equal(group1.assistant_id,'owner');assert.equal(group1.version,2);assert.equal(group2.assistant_id,null);
+assert(await service(owner).one('SELECT * FROM publishers WHERE id=?',['P-KEEP']));assert.equal((await service(owner).one('SELECT * FROM reports WHERE id=?',['R-KEEP']))!.updated_by,existing.id);
+const deletion=(await service(owner).one('SELECT * FROM audit WHERE entity_id=? AND action=?',[existing.id,'Eliminar cuenta de S-21']))!;
+assert.equal(JSON.parse(deletion.before_json).group_assignments.length,2);assert.equal(JSON.parse(deletion.after_json).auth_account_preserved,true);
+const inactive=await save({email:'inactive@example.test',name:'Inactivo',profile_id:'consulta',active:0});await credentials(owner).remove(inactive.id,1);
+await service(owner).statement('INSERT INTO profiles(id,name,permissions) VALUES(?,?,?)',['access-manager','Accesos','["users.write"]']).run();
+await service(owner).statement('INSERT INTO users(id,subject,email,name,profile_id) VALUES(?,?,?,?,?)',['operator','operator-auth','operator@example.test','Operador','access-manager']).run();
+await assert.rejects(()=>credentials({userId:'operator-auth',email:'operator@example.test',displayName:'Operador'}).remove('owner',1),/al menos un administrador/);
+const logs=JSON.stringify(await service(owner).rows('SELECT * FROM audit'));assert(!logs.includes('Ab1!xy')&&!logs.includes('Nueva2!')&&!logs.includes(TEMP_PASSWORD));
+await pg.close();console.log('PASS: contraseña inicial, requisitos explícitos y símbolos, confirmación, sesiones, permisos, restablecimiento, eliminación de acceso S-21, conservación de Auth e informes y auditoría sin contraseñas.');

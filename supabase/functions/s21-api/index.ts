@@ -54,7 +54,7 @@ Deno.serve(async(req:Request)=>{
   });
   if(path==='auth-status')return reply(await credentials.status());
   if(path==='password-change')return reply(await credentials.change(body.password,body.confirmation));
-  if(path==='credentials')return reply(await credentials.manage(body.action,body.id,body.version));
+  if(path==='credentials')return reply(body.action==='delete'?await credentials.remove(body.id,body.version):await credentials.manage(body.action,body.id,body.version));
   const result=await sql.begin(async tx=>{
    // Serialize writes before reading versions, periods, profiles and historical scope.
    // No request-local identity is stored on the shared connection pool.

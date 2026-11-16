@@ -9,9 +9,26 @@ export type AuthAdmin={create:(email:string,password:string)=>Promise<string>;up
 const fail=(message:string,status=400,code='CREDENTIAL_ERROR')=>Object.assign(new Error(message),{status,code});
 export function createCredentialService(run:CredentialRun,auth:AuthAdmin,clock=()=>new Date().toISOString()){
  async function status(){return run(async s=>{const a=await s.actor(true);return {id:a.id,name:a.name,email:a.email,must_change_password:!!a.must_change_password,credential_state:a.credential_state||'ready',can_change_password:a.credential_state==='ready'||a.credential_state==='error'&&a.credential_operation==='change'};});}
- async function audit(s:Service,actor:Row,target:string,action:string,after:Row){
-  await s.statement('INSERT INTO audit(id,at,actor,action,entity,entity_id,after_json,reason) VALUES(?,?,?,?,?,?,?,?)',[crypto.randomUUID(),clock(),actor.id,action,'users',target,JSON.stringify(after),'Administración de acceso S-21; sin registrar contraseñas.']).run();
+ async function audit(s:Service,actor:Row,target:string,action:string,after:Row,before?:Row){
+  await s.statement('INSERT INTO audit(id,at,actor,action,entity,entity_id,before_json,after_json,reason) VALUES(?,?,?,?,?,?,?,?,?)',[crypto.randomUUID(),clock(),actor.id,action,'users',target,before?JSON.stringify(before):null,JSON.stringify(after),'Administración de acceso S-21; sin registrar contraseñas.']).run();
  }
+ async function remove(id:string,version?:number){return run(async s=>{
+  const a=await s.actor();if(!a.permissions.includes('users.write'))throw fail('Tu perfil no permite eliminar cuentas.',403);
+  const u=await s.one('SELECT * FROM users WHERE id=?',[id]);if(!u)throw fail('Usuario no encontrado.',404);
+  if(u.id===a.id)throw fail('Otro administrador debe eliminar tu cuenta.');
+  if(!Number.isInteger(version)||u.version!==version)throw fail('El usuario cambió. Actualiza antes de continuar.',409);
+  if(u.active&&u.profile_id==='admin'){
+   const administrators=await s.one("SELECT COUNT(*) AS total FROM users WHERE active=1 AND profile_id='admin'");
+   if(Number(administrators?.total)<=1)throw fail('Debe quedar al menos un administrador habilitado.');
+  }
+  const groups=await s.rows('SELECT id,name,leader_id,assistant_id,version FROM groups WHERE leader_id=? OR assistant_id=?',[id,id]);
+  for(const group of groups)await s.statement('UPDATE groups SET leader_id=?,assistant_id=?,version=version+1 WHERE id=? AND version=?',[group.leader_id===id?null:group.leader_id,group.assistant_id===id?null:group.assistant_id,group.id,group.version]).run();
+  const result=await s.statement('DELETE FROM users WHERE id=? AND version=?',[id,u.version]).run();
+  if(result.meta.changes!==1)throw fail('El usuario cambió. Actualiza antes de continuar.',409);
+  await audit(s,a,id,'Eliminar cuenta de S-21',{deleted:true,auth_account_preserved:true,reports_preserved:true},{user:u,group_assignments:groups});
+  // Auth is shared with S-13. Removing the S-21 authorization revokes every S-21 session.
+  return {deleted:true,auth_account_preserved:true};
+ });}
  async function markFailure(id:string,operationId:string){
   // A failed external Auth operation must leave the account gated.
   try{await run(async s=>{await s.actor(true);await s.statement("UPDATE users SET credential_state='error',must_change_password=1,version=version+1 WHERE id=? AND credential_operation_id=?",[id,operationId]).run();});}catch{/* Keep the previous gated state if the caller's session expired. */}
@@ -74,5 +91,5 @@ export function createCredentialService(run:CredentialRun,auth:AuthAdmin,clock=(
   // Require a fresh password sign-in: other sessions opened with the default cannot inherit access.
   return {requires_relogin:true};
  }
- return {status,manage,change};
+ return {status,manage,change,remove};
 }
