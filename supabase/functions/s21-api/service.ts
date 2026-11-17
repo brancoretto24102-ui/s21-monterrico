@@ -1,4 +1,4 @@
-import {type Row,DEFAULT_TYPES,PERMISSIONS,parseJSON,currentMonth,previousMonth,validateMonth,validateReport,valueAt,inScope,can} from './domain.ts';
+import {type Row,DEFAULT_TYPES,PERMISSIONS,GUEST_PERMISSIONS,parseJSON,currentMonth,previousMonth,validateMonth,validateReport,valueAt,inScope,can} from './domain.ts';
 import type {Prepared,Database} from './database.ts';
 export type Identity={userId:string,email:string,displayName:string,sessionCreatedAt?:string,authenticationMethod?:'password'|'oauth'};
 export function createService(db:Database,identity:Identity){
@@ -13,7 +13,7 @@ function auditStatement(actor:Row,action:string,entity:string,id:string,before:a
 async function defaults(){
  if(await one('SELECT value FROM settings WHERE key=?',['defaults_v1']))return;
  const ps=PERMISSIONS.map(x=>x[0]);const leaders=['dashboard','masters.read','reports.write','reports.submit','comments.read','pdf.single'];
- const profiles=[['admin','Administrador',ps],['gestor','Gestor de informes',ps.filter(p=>!['users.write','backup'].includes(p))],['encargado','Encargado de grupo',leaders],['auxiliar','Auxiliar de grupo',leaders],['consulta','Consulta',['dashboard','masters.read','comments.read']]];
+ const profiles=[['admin','Administrador',ps],['gestor','Gestor de informes',ps.filter(p=>!['users.write','backup'].includes(p))],['encargado','Encargado de grupo',leaders],['auxiliar','Auxiliar de grupo',leaders],['consulta','Consulta',['dashboard','masters.read','comments.read']],['invitado','Invitado',GUEST_PERMISSIONS]];
  const qs=profiles.map(([id,name,permissions])=>statement('INSERT OR IGNORE INTO profiles(id,name,permissions) VALUES(?,?,?)',[id,name,json(permissions)]));
  for(const t of DEFAULT_TYPES)qs.push(statement('INSERT OR IGNORE INTO preaching_types(id,name,counts_hours,goal_kind,monthly_goal,annual_goal,monthly_reference,requires_campaign,versions,description) VALUES(?,?,?,?,?,?,?,?,?,?)',[t.id,t.name,t.counts_hours,t.goal_kind,t.monthly_goal,t.annual_goal,t.monthly_reference,t.requires_campaign,json([{since:'1900-01',...t}]),t.description]));
  for(let i=1;i<=6;i++)qs.push(statement('INSERT OR IGNORE INTO groups(id,code,name) VALUES(?,?,?)',[`G${i}`,`G${i}`,`Grupo ${i}`]));
@@ -44,10 +44,10 @@ async function state(a:Row){
   rows('SELECT * FROM reports'+(all?'':` WHERE group_id IN (${marks})`),all?[]:g),
   rows('SELECT * FROM histories'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs),
   rows('SELECT * FROM groups'+(all?'':` WHERE id IN (${marks})`),all?[]:g),rows('SELECT * FROM preaching_types'),rows('SELECT * FROM catalogs'),rows('SELECT * FROM campaigns'),rows('SELECT * FROM periods'),
-  rows('SELECT * FROM corrections'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs),
+  (can(a,'reports.write')||can(a,'reports.correct'))?rows('SELECT * FROM corrections'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs):Promise.resolve([]),
   can(a,'users.write')?rows('SELECT * FROM profiles'):Promise.resolve([]),
   can(a,'users.write')?rows('SELECT * FROM users'):rows(`SELECT id,name FROM users WHERE active=1 AND id IN(SELECT leader_id FROM groups${all?'':` WHERE id IN (${marks})`} UNION SELECT assistant_id FROM groups${all?'':` WHERE id IN (${marks})`})`,all?[]:[...g,...g]),
-  rows('SELECT * FROM issues'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs),
+  (can(a,'reports.write')||can(a,'reports.correct'))?rows('SELECT * FROM issues'+(all?'':` WHERE publisher_id IN (SELECT id FROM publishers${pWhere})`),pubArgs):Promise.resolve([]),
   can(a,'audit')?rows('SELECT * FROM audit ORDER BY at DESC LIMIT 500'):Promise.resolve([]),can(a,'import')?rows('SELECT * FROM imports ORDER BY created_at DESC'):Promise.resolve([])
  ]);
  if(can(a,'users.write')&&us.some(u=>u.credential_state==='error')){
@@ -100,7 +100,7 @@ async function saveEntity(a:Row,entity:string,input:Row){
   if(existing?.subject&&values.email&&values.email!==existing.email)throw new ApiError('El correo de una cuenta vinculada no se puede sustituir. Crea otro usuario si corresponde.');
   if(existing?.id===a.id&&(values.active===0||values.profile_id&&values.profile_id!=='admin'))throw new ApiError('Conserva tu acceso de administrador mientras administras el sistema.');
  }
- if(entity==='profile'){const ps=parseJSON<string[]>(values.permissions,[]);if(ps.some(p=>!PERMISSIONS.some(([k])=>k===p)))throw new ApiError('Permiso desconocido.');if(id==='admin'&&PERMISSIONS.some(([k])=>!ps.includes(k)))throw new ApiError('El perfil Administrador debe conservar todos los permisos.');}
+ if(entity==='profile'){const ps=parseJSON<string[]>(values.permissions,[]);if(ps.some(p=>!PERMISSIONS.some(([k])=>k===p)))throw new ApiError('Permiso desconocido.');if(id==='admin'&&PERMISSIONS.some(([k])=>!can({permissions:ps},k)))throw new ApiError('El perfil Administrador debe conservar todos los permisos.');}
  if(entity==='type')for(const key of ['monthly_goal','annual_goal','monthly_reference'])if(values[key]!=null&&(typeof values[key]!=='number'||!Number.isFinite(values[key])||values[key]<0))throw new ApiError('Las metas deben ser números no negativos.');
  if(entity==='type'&&!existing)values.versions=json([{since:input.effective_month||currentMonth(),...Object.fromEntries(['counts_hours','goal_kind','monthly_goal','annual_goal','monthly_reference','requires_campaign'].map(k=>[k,values[k]??null]))}]);
  if(entity==='type'&&existing){

@@ -1,6 +1,7 @@
 export type Row=Record<string,any>;
 export const MONTHS=['Septiembre','Octubre','Noviembre','Diciembre','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto'];
-export const PERMISSIONS=[['dashboard','Ver dashboard'],['masters.read','Consultar maestros'],['publishers.write','Administrar publicadores'],['groups.write','Administrar grupos'],['catalogs.write','Administrar catálogos y metas'],['assignments.write','Administrar vigencias'],['reports.write','Registrar informes'],['reports.submit','Enviar informes'],['reports.correct','Corregir informes enviados'],['periods.write','Cerrar y reabrir períodos'],['comments.read','Consultar comentarios'],['groups.all','Todos los grupos'],['pdf.single','Exportar PDF individual'],['pdf.bulk','Exportar PDF masivo y ZIP'],['import','Importar Excel'],['audit','Consultar auditoría'],['users.write','Administrar usuarios y perfiles'],['backup','Respaldo y recuperación']] as const;
+export const PERMISSIONS=[['dashboard','Ver dashboard'],['masters.read','Consultar todos los maestros'],['publishers.read','Consultar publicadores'],['groups.read','Consultar grupos'],['publishers.write','Administrar publicadores'],['groups.write','Administrar grupos'],['catalogs.write','Administrar catálogos y metas'],['assignments.write','Administrar vigencias'],['reports.write','Registrar informes'],['reports.submit','Enviar informes'],['reports.correct','Corregir informes enviados'],['periods.write','Cerrar y reabrir períodos'],['comments.read','Consultar comentarios'],['groups.all','Todos los grupos'],['pdf.single','Exportar PDF individual'],['pdf.bulk','Exportar PDF masivo y ZIP'],['import','Importar Excel'],['audit','Consultar auditoría'],['users.write','Administrar usuarios y perfiles'],['backup','Respaldo y recuperación']] as const;
+export const GUEST_PERMISSIONS=['dashboard','publishers.read','groups.read','comments.read','groups.all','pdf.single','pdf.bulk'] as const;
 export const DEFAULT_TYPES:Row[]=[
  {id:'PUB',name:'Normal',counts_hours:0,goal_kind:'none',monthly_goal:null,annual_goal:null,monthly_reference:null,requires_campaign:0,description:'Participación y cursos bíblicos.'},
  {id:'PA',name:'Auxiliar por campaña',counts_hours:1,goal_kind:'monthly',monthly_goal:15,annual_goal:null,monthly_reference:null,requires_campaign:1,description:'15 horas durante una campaña autorizada.'},
@@ -23,7 +24,7 @@ export function valueAt(p:Row,kind:string,m:string,hs:Row[]){const h=historyAt(p
 export function overlaps(a:Row,b:Row){return a.start_month<=(b.end_month||'9999-12')&&b.start_month<=(a.end_month||'9999-12');}
 export function typeVersion(t:Row|undefined,m:string):Row|undefined{if(!t)return;const v=parseJSON<Row[]>(t.versions,[]).filter(v=>v.since<=m).sort((a,b)=>b.since.localeCompare(a.since))[0];return v?{...t,...v}:t;}
 export function inScope(a:Row,g:string|null){return a.permissions.includes('groups.all')||a.groups.includes(g);}
-export function can(a:Row,p:string){return a?.permissions?.includes(p);}
+export function can(a:Row,p:string){const ps=a?.permissions||[];return ps.includes(p)||(['publishers.read','groups.read'].includes(p)&&ps.includes('masters.read'));}
 export function validateReport(i:Row,counts:boolean,complete=false){const e:string[]=[];
  if(i.participation!=null&&!['SI','NO'].includes(i.participation))e.push('Selecciona SI o NO en participación.');
  for(const k of ['hours','courses'])if(i[k]!=null&&(typeof i[k]!=='number'||!Number.isFinite(i[k])||i[k]<0))e.push(`${k==='hours'?'Horas':'Cursos bíblicos'} debe ser un número no negativo.`);
